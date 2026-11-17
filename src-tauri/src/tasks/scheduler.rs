@@ -119,6 +119,11 @@ const TASKS: &[SchedTask] = &[
     // 替换 CN 区缓存；开关/时刻独立（settings.qoder_catalog_sync_enabled /
     // qoder_catalog_sync_hhmm，均默认开，环境配置页可改；空池/无凭证静默跳过不计失败）
     SchedTask { key: "qoder-catalog-sync", name: "Qoder 模型目录同步", hhmm: "05:50", kind: "models" },
+    // OfficeAce（华为果办）/ LobsterAI（网易有道龙虾）每日签到：复用桌面端登录态
+    //（本机存储只读），单账号；时刻可改（settings.officeace_checkin_hhmm /
+    // lobsterai_checkin_hhmm），开关独立（默认开）
+    SchedTask { key: "officeace-checkin", name: "OfficeAce（果办）每日签到", hhmm: "09:40", kind: "fix" },
+    SchedTask { key: "lobsterai-checkin", name: "LobsterAI（有道龙虾）每日签到", hhmm: "09:50", kind: "fix" },
     // Buddy 国际版模型目录同步（2026-10-16）：/v3/config 直连拉取（动态目录替换，
     // 与 API 服务启动挂点互补）；开关/时刻独立（默认开，05:55 错峰）
     SchedTask { key: "buddy-ai-catalog-sync", name: "Buddy 国际版模型目录同步", hhmm: "05:55", kind: "models" },
@@ -400,6 +405,8 @@ fn effective_hhmm(st: &AppState, t: &SchedTask) -> String {
         "wb-credits-snapshot" => Some(st.settings().wb_credits_sync_hhmm),
         "trae-credits-snapshot" => Some(st.settings().trae_credits_sync_hhmm),
         "qoder-checkin" => Some(st.settings().qoder_checkin_hhmm),
+        "officeace-checkin" => Some(st.settings().officeace_checkin_hhmm),
+        "lobsterai-checkin" => Some(st.settings().lobsterai_checkin_hhmm),
         "buddy-ai-checkin" => Some(st.settings().buddy_ai_checkin_hhmm),
         "buddy-ai-renew" => Some(st.settings().buddy_ai_renew_hhmm),
         "buddy-ai-credits-sync" => Some(st.settings().buddy_ai_credits_sync_hhmm),
@@ -446,6 +453,9 @@ fn enabled(st: &AppState, key: &str) -> bool {
         "wb-growth" => st.settings().wb_growth_enabled,
         // F-80 Qoder：签到跟随环境配置开关（qoder_settings.auto_checkin 默认开）
         "qoder-checkin" => crate::commands::qoder::load_settings(st).auto_checkin,
+        // OfficeAce / LobsterAI：跟随全局设置开关（默认开）
+        "officeace-checkin" => st.settings().officeace_checkin_enabled,
+        "lobsterai-checkin" => st.settings().lobsterai_checkin_enabled,
         // Buddy 国际版每日活跃打卡（阶段 3b）：独立开关（默认关，国际档显式开启制）
         "buddy-ai-checkin" => crate::commands::workbuddy::buddy_ai_checkin_enabled(st),
         // Buddy 国际版凭证兜底续期（2026-10-16，默认开，任务配置页可关）
@@ -748,6 +758,32 @@ fn run_task(
                 return Err(format!(
                     "buddy-ai 打卡：{ok_count} 成功 / {already_count} 已完成 / {retryable} 失败（稍后自动重试）"
                 ));
+            }
+            Ok(done)
+        }
+        // OfficeAce（华为果办）每日签到：本机登录态单账号；抢轮次锁与 UI 路径互斥
+        "officeace-checkin" => {
+            let Ok(_round) = super::officeace_checkin::try_acquire_round() else {
+                return Ok(json!({ "ok": true, "skipped": "已有 OfficeAce 签到任务在执行中，本轮跳过", "skipped_busy": true }));
+            };
+            let done = super::officeace_checkin::run_checkin_round(st, &mut |_| {});
+            let failed = done.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            if failed > 0 {
+                let ok = done.get("ok").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                return Err(format!("OfficeAce 签到：{ok} 成功 / {failed} 失败（稍后自动重试）"));
+            }
+            Ok(done)
+        }
+        // LobsterAI（网易有道龙虾）每日签到：本机登录态单账号；抢轮次锁与 UI 路径互斥
+        "lobsterai-checkin" => {
+            let Ok(_round) = super::lobsterai_checkin::try_acquire_round() else {
+                return Ok(json!({ "ok": true, "skipped": "已有 LobsterAI 签到任务在执行中，本轮跳过", "skipped_busy": true }));
+            };
+            let done = super::lobsterai_checkin::run_checkin_round(st, &mut |_| {});
+            let failed = done.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            if failed > 0 {
+                let ok = done.get("ok").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                return Err(format!("LobsterAI 签到：{ok} 成功 / {failed} 失败（稍后自动重试）"));
             }
             Ok(done)
         }

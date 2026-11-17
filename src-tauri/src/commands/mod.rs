@@ -7,6 +7,8 @@ pub mod custom;
 pub mod doubao;
 pub mod env;
 pub mod misc;
+pub mod lobsterai;
+pub mod officeace;
 pub mod oauth;
 pub mod oauth_loopback;
 pub mod process;

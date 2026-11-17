@@ -1,6 +1,9 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+  LocalCheckinRecord,
+  OfficeAceStatus,
+  LobsterAiStatus,
   AccountView,
   ApiServiceStatus,
   BuddyAiAccountView,
@@ -176,6 +179,19 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 // 所有 invoke 封装集中于此，字段名严格遵循 Rust 端 snake_case 约定。
 export const api = {
+  // ---- OfficeAce（华为果办）/ LobsterAI（有道龙虾）：本机登录态自动签到 ----
+  officeace: {
+    status: () => invoke<OfficeAceStatus>('officeace_status'),
+    checkinStart: () => invoke<void>('officeace_checkin_start'),
+    checkinResults: (days = 30) =>
+      invoke<LocalCheckinRecord[]>('officeace_checkin_results', { days }),
+  },
+  lobsterai: {
+    status: () => invoke<LobsterAiStatus>('lobsterai_status'),
+    checkinStart: () => invoke<void>('lobsterai_checkin_start'),
+    checkinResults: (days = 30) =>
+      invoke<LocalCheckinRecord[]>('lobsterai_checkin_results', { days }),
+  },
   env: {
     // TraeWork 合并后唯一客户端检测（原 env_check 已删，统一走 Trae CN 通道）
     check: () => invoke<EnvStatus>('env_check_trae_cn'),

@@ -326,6 +326,15 @@ impl AppState {
             s.qoder_credits_sync_enabled = true;
             s.qoder_credits_sync_hhmm = "23:40".into();
         }
+        // OfficeAce / LobsterAI（本机登录态签到）：时刻为空视为从未配置，回填默认开
+        if s.officeace_checkin_hhmm.trim().is_empty() {
+            s.officeace_checkin_enabled = true;
+            s.officeace_checkin_hhmm = "09:40".into();
+        }
+        if s.lobsterai_checkin_hhmm.trim().is_empty() {
+            s.lobsterai_checkin_enabled = true;
+            s.lobsterai_checkin_hhmm = "09:50".into();
+        }
         // Qoder 会话流水定时合并（qoder-sessions-compact）：同款零值回填
         //（kv 完全缺失走派生 Default bool=false 会漏开；时刻为空视为从未配置，回填默认开）
         if s.qoder_sessions_compact_hhmm.trim().is_empty() {
@@ -398,7 +407,7 @@ impl AppState {
         {
             let pinned = s.pinned_app.clone();
             s.hidden_apps.retain(|k| {
-                matches!(k.as_str(), "trae" | "buddy" | "qoder" | "doubao") && k != &pinned
+                matches!(k.as_str(), "trae" | "buddy" | "qoder" | "doubao" | "officeace" | "lobsterai") && k != &pinned
             });
             s.hidden_apps.sort_unstable();
             s.hidden_apps.dedup();

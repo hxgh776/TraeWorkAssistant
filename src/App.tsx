@@ -38,6 +38,8 @@ import BuddyAiApiService from './pages/buddyai/BuddyAiApiService';
 import BuddyAiSettings from './pages/buddyai/BuddyAiSettings';
 import ApiManagerModal from './components/api/ApiManagerModal';
 import TraeWorkMigrationGuide from './components/TraeWorkMigrationGuide';
+import OfficeAceCheckin from './pages/officeace/OfficeAceCheckin';
+import LobsterAiCheckin from './pages/lobsterai/LobsterAiCheckin';
 
 function renderView(view: string) {
   switch (view) {
@@ -103,6 +105,10 @@ function renderView(view: string) {
       return <BuddyAiApiService />;
     case 'buddyai-settings':
       return <BuddyAiSettings />;
+    case 'officeace-checkin':
+      return <OfficeAceCheckin />;
+    case 'lobsterai-checkin':
+      return <LobsterAiCheckin />;
     default:
       return <Dashboard />;
   }

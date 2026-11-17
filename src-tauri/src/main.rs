@@ -609,6 +609,12 @@ fn main() {
             commands::qoder::qoder_accounts_import,
             commands::qoder::qoder_env_reset_items,
             commands::qoder::qoder_env_reset,
+            commands::officeace::officeace_status,
+            commands::officeace::officeace_checkin_start,
+            commands::officeace::officeace_checkin_results,
+            commands::lobsterai::lobsterai_status,
+            commands::lobsterai::lobsterai_checkin_start,
+            commands::lobsterai::lobsterai_checkin_results,
             tasks::scheduler::scheduler_status,
         ])
         .setup(|app| {
@@ -931,6 +937,15 @@ fn main() {
                 let app2 = app.handle().clone();
                 let st = app.state::<AppState>();
                 commands::qoder::startup_auto_checkin(&app2, &st);
+            }
+
+            // OfficeAce（华为果办）/ LobsterAI（有道龙虾）启动自动补签：本机登录态
+            // 单账号，独立开关（默认开），抢不到跨进程轮次锁幂等跳过
+            {
+                let app2 = app.handle().clone();
+                let st = app.state::<AppState>();
+                commands::officeace::startup_auto_checkin(&app2, &st);
+                commands::lobsterai::startup_auto_checkin(&app2, &st);
             }
 
             // CodeBuddy CLI 五重防护自动轮换（F-59）：独立后台线程按检查间隔执行，

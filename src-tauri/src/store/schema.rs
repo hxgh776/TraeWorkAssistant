@@ -9,7 +9,7 @@
 
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// 行文档表白名单（rows_* 原语允许操作的表，防表名拼接注入）
 pub const ROW_TABLES: &[&str] = &[
@@ -31,6 +31,8 @@ pub const ROW_TABLES: &[&str] = &[
     "qoder_tokens",
     "qoder_checkin_results",
     "qoder_credits_history",
+    "officeace_checkin_results",
+    "lobsterai_checkin_results",
 ];
 
 const DDL: &[&str] = &[
@@ -312,6 +314,18 @@ const DDL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_wb_checkin_results_date ON wb_checkin_results(date)",
     "CREATE INDEX IF NOT EXISTS idx_buddy_ai_checkin_results_date ON buddy_ai_checkin_results(date)",
     "CREATE INDEX IF NOT EXISTS idx_checkin_results_day ON checkin_results(day)",
+    // OfficeAce（华为果办）每日签到结果：本机登录态单账号，90 天滚动
+    "CREATE TABLE IF NOT EXISTS officeace_checkin_results (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    // LobsterAI（网易有道龙虾）每日签到结果：本机登录态单账号，90 天滚动
+    "CREATE TABLE IF NOT EXISTS lobsterai_checkin_results (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
 ];
 
 /// 建库（幂等：IF NOT EXISTS）。user_version 由迁移器负责写入。

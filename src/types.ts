@@ -35,10 +35,20 @@ export type ViewKey =
   | 'buddyai-checkin'
   | 'buddyai-credits'
   | 'buddyai-api-service'
-  | 'buddyai-settings';
+  | 'buddyai-settings'
+  // OfficeAce（华为果办）/ LobsterAI（网易有道龙虾）：本机登录态自动签到，单页
+  | 'officeace-checkin'
+  | 'lobsterai-checkin';
 
 /** 侧边栏应用切换（左下角 Tab）：Trae 当前菜单 / Buddy / Qoder（F-80）/ 豆包 / BuddyAI（buddy-ai 国际版） */
-export type AppKey = 'trae' | 'buddy' | 'qoder' | 'doubao' | 'buddy-ai';
+export type AppKey =
+  | 'trae'
+  | 'buddy'
+  | 'qoder'
+  | 'doubao'
+  | 'buddy-ai'
+  | 'officeace'
+  | 'lobsterai';
 
 /** 各应用的默认落地页 */
 export const APP_HOME_VIEW: Record<AppKey, ViewKey> = {
@@ -47,6 +57,8 @@ export const APP_HOME_VIEW: Record<AppKey, ViewKey> = {
   qoder: 'qoder-overview',
   doubao: 'doubao-overview',
   'buddy-ai': 'buddyai-overview',
+  officeace: 'officeace-checkin',
+  lobsterai: 'lobsterai-checkin',
 };
 
 
@@ -427,6 +439,14 @@ export interface Settings {
   qoderwork_path: string | null;
   /** Qoder 每日签到调度触发时刻 HH:MM（默认 10:15：单次覆盖 0 点签到与 10:00 登录奖励双活动） */
   qoder_checkin_hhmm: string;
+  /** OfficeAce（华为果办）每日签到调度开关（默认开；复用桌面端登录态） */
+  officeace_checkin_enabled: boolean;
+  /** OfficeAce 每日签到触发时刻 HH:MM（默认 09:40） */
+  officeace_checkin_hhmm: string;
+  /** LobsterAI（网易有道龙虾）每日签到调度开关（默认开） */
+  lobsterai_checkin_enabled: boolean;
+  /** LobsterAI 每日签到触发时刻 HH:MM（默认 09:50） */
+  lobsterai_checkin_hhmm: string;
   /** Qoder 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:40） */
   qoder_credits_sync_hhmm: string;
   /** Qoder 积分数据同步旧开关（保留兼容；调度已改按 qoder_credits_sync_mode 判定） */
@@ -2044,4 +2064,59 @@ export interface QoderCreditsSnapshot {
   /** 当日获得（签到奖励合计；无签到数据 null） */
   earned?: number | null;
   accounts: { user_id: string; total: number | null }[];
+}
+
+// ── OfficeAce（华为果办）/ LobsterAI（网易有道龙虾）：本机登录态自动签到 ──
+
+/** 本机登录态（只读；不含凭据） */
+export interface OfficeAceStatus {
+  installed: boolean;
+  logged_in: boolean;
+  user_id: string;
+  name: string;
+  session_expires_at?: string | null;
+  /** 控制面临时凭证到期时刻（Unix 毫秒；0/缺省 = 未知） */
+  credential_expires_at?: number | null;
+  /** 凭证是否仍在有效期内（含 30 分钟余量） */
+  credential_fresh: boolean;
+  gateway_host: string;
+  error?: string | null;
+}
+
+export interface LobsterAiStatus {
+  installed: boolean;
+  logged_in: boolean;
+  user_id: string;
+  name: string;
+  token_expires_at?: number | null;
+  token_expired: boolean;
+  error?: string | null;
+}
+
+/** 两平台共用的签到结果行（本机登录态单账号） */
+export interface LocalCheckinRecord {
+  date: string;
+  time: string;
+  time_ms: number;
+  user_id: string;
+  name: string;
+  status: string;
+  message: string;
+  reward?: number | null;
+}
+
+/** 签到进度事件（NDJSON 字符串解析后） */
+export interface LocalCheckinLine {
+  index: number;
+  user_id: string;
+  name: string;
+  status: string;
+  message?: string;
+  reward?: number;
+}
+
+export interface LocalCheckinDone {
+  ok: number;
+  already: number;
+  failed: number;
 }

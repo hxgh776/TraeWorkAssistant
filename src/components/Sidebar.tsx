@@ -77,14 +77,27 @@ const BUDDYAI_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
   { key: 'buddyai-settings', label: '环境配置', icon: Settings },
 ];
 
+/** OfficeAce（华为果办）应用菜单：本机登录态自动签到（单页） */
+const OFFICEACE_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
+  { key: 'officeace-checkin', label: '每日签到', icon: CalendarCheck },
+];
+
+/** LobsterAI（网易有道龙虾）应用菜单：本机登录态自动签到（单页） */
+const LOBSTERAI_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
+  { key: 'lobsterai-checkin', label: '每日签到', icon: PlayCircle },
+];
+
 /** 应用切换 Tab：trae = 当前菜单；buddy = 批次1接入；qoder = F-80 接入；doubao = 接入中；
- *  buddy-ai = 国际版独立池（默认隐藏，系统设置-应用显示 opt-in） */
+ *  buddy-ai = 国际版独立池（默认隐藏，系统设置-应用显示 opt-in）；
+ *  officeace / lobsterai = 本机登录态自动签到（单页） */
 export const APP_TABS: { key: AppKey; label: string; icon: typeof Users; disabled?: boolean; title?: string }[] = [
   { key: 'trae', label: 'Trae', icon: Sparkles },
   { key: 'buddy', label: 'Buddy', icon: Bot, title: 'WorkBuddy / CodeBuddy' },
   { key: 'qoder', label: 'Qoder', icon: Boxes, title: 'Qoder CN（Qoder CN IDE / Qoder CN / CLI）' },
   { key: 'doubao', label: '豆包', icon: LayoutGrid },
   { key: 'buddy-ai', label: 'BuddyAI', icon: Globe, title: 'Buddy 国际版（buddy-ai 独立池）' },
+  { key: 'officeace', label: '果办', icon: CalendarCheck, title: '华为 OfficeAce（果办）每日签到' },
+  { key: 'lobsterai', label: '龙虾', icon: PlayCircle, title: 'LobsterAI（网易有道龙虾）每日签到' },
 ];
 
 /** 全部合法应用 key（settings 脏值兜底用） */
@@ -131,7 +144,8 @@ export default function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeApp, pinnedApp, settings?.hidden_apps, settings?.buddy_ai_visible]);
 
-  // 按当前应用切换菜单：Trae → 现有 6 页；豆包 → 3 页；Buddy → 6 页；Qoder → 6 页（F-80）；BuddyAI → 6 页（国际版对齐 Buddy 产品形态）
+  // 按当前应用切换菜单：Trae → 现有 6 页；豆包 → 3 页；Buddy → 6 页；Qoder → 6 页（F-80）；
+  // BuddyAI → 6 页；OfficeAce / LobsterAI → 单页（每日签到）
   const nav =
     activeApp === 'doubao'
       ? DOUBAO_NAV
@@ -141,6 +155,10 @@ export default function Sidebar({
       ? QODER_NAV
       : activeApp === 'buddy-ai'
       ? BUDDYAI_NAV
+      : activeApp === 'officeace'
+      ? OFFICEACE_NAV
+      : activeApp === 'lobsterai'
+      ? LOBSTERAI_NAV
       : NAV;
 
   // 主题轮询：每次点击切换到下一个主题并持久化

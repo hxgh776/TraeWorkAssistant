@@ -6,6 +6,17 @@
 
 ---
 
+## [Unreleased] · 2026-11-16 · 新增 OfficeAce（果办）/ LobsterAI（有道龙虾）自动签到
+
+### 新功能
+
+- **OfficeAce（华为果办）每日签到**：复用本机桌面端登录态（只读 `storage.sqlite` + Windows 凭据管理器 provider-state，不保存凭据），按 V11-HMAC-SHA256 签名调用控制面 `POST /v1/subscription/bonus/claim` 领取每日奖励积分；签到前后对比 `bonus_skus` 余额增量，如实展示「已签到 / +N 积分 / 失败原因」。桌面端临时凭证约 2 小时有效，过期时给出「打开并登录 OfficeAce 客户端后重试」的明确指引。
+- **LobsterAI（网易有道龙虾）每日签到**：复用本机 `%APPDATA%\LobsterAI\lobsterai.sqlite` 登录态，按「活动 slot → context → check_in → context 复核」流程签约，只有 `claimedToday/claimedDays` 确实变化才计成功；支持连签天数与剩余天数展示。
+- **应用内调度与启动补签**：两平台各新增独立任务项（默认 OfficeAce 09:40 / LobsterAI 09:50，可改），并提供 `--task-run officeace-checkin` / `--task-run lobsterai-checkin` CLI 任务；跨进程轮次锁与 UI 手动签到互斥，空登录态时如实报失败而非静默跳过。
+- **新增应用 Tab 与签到页**：侧边栏新增「果办」「龙虾」两个应用入口，页面含本机账号状态、立即签到、NDJSON 进度、近 30 天记录与自动签到时时刻/开关设置；签到结果落 SQLite（90 天滚动）。
+
+---
+
 ## [3.9.3] · 2026-11-11 · 网关指纹清洗与账号快照健壮性（三项修复加强）
 
 ### 修复加强

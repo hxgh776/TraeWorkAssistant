@@ -305,6 +305,11 @@ function defaultSettings(): Settings {
     qoder_ide_path: null,
     qoderwork_path: null,
     qoder_checkin_hhmm: '10:15',
+    // OfficeAce（果办）/ LobsterAI（有道龙虾）：本机登录态自动签到（默认开）
+    officeace_checkin_enabled: true,
+    officeace_checkin_hhmm: '09:40',
+    lobsterai_checkin_enabled: true,
+    lobsterai_checkin_hhmm: '09:50',
     qoder_credits_sync_hhmm: '23:40',
     qoder_credits_sync_enabled: true,
     qoder_credits_sync_mode: 'every_hours',

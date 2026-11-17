@@ -2489,3 +2489,72 @@ pub fn qoder_credits_history_upsert(s: &Store, snap: &Value) -> Result<(), Strin
     }
     Ok(())
 }
+
+// ── OfficeAce / LobsterAI 每日签到结果（pk = date|user_id|time_ms；90 天滚动）──
+
+const CHECKIN_RESULT_TABLES: &[&str] = &[
+    "officeace_checkin_results",
+    "lobsterai_checkin_results",
+];
+
+fn ensure_result_table(table: &str) -> Result<(), String> {
+    if CHECKIN_RESULT_TABLES.contains(&table) {
+        Ok(())
+    } else {
+        Err(format!("非法签到结果表：{table}"))
+    }
+}
+
+/// 单条签到结果 UPSERT + 90 天滚动裁剪（口径对齐 qoder_checkin_results_upsert）。
+pub fn checkin_results_upsert_into(s: &Store, table: &str, rec: &Value) -> Result<(), String> {
+    ensure_result_table(table)?;
+    let date = rec.get("date").and_then(Value::as_str).unwrap_or("").to_string();
+    let uid = rec.get("user_id").and_then(Value::as_str).unwrap_or("").to_string();
+    let tail = match rec.get("time_ms").and_then(Value::as_i64) {
+        Some(ms) => ms.to_string(),
+        None => rec.get("time").and_then(Value::as_str).unwrap_or("").to_string(),
+    };
+    if date.is_empty() || uid.is_empty() || tail.is_empty() {
+        return Err("签到结果缺少 date/user_id/time_ms(time)".into());
+    }
+    s.row_upsert(table, &format!("{date}|{uid}|{tail}"), rec)?;
+    let cutoff = (chrono::Local::now().date_naive() - chrono::Duration::days(90))
+        .format("%Y-%m-%d")
+        .to_string();
+    let stale: Vec<String> = s
+        .rows_all(table)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(pk, _)| pk)
+        .filter(|pk| pk.split('|').next().unwrap_or("") < cutoff.as_str())
+        .collect();
+    for pk in stale {
+        let sql = format!("DELETE FROM {table} WHERE pk = ?1");
+        if let Err(e) = s.with_conn(|c| c.execute(&sql, [&pk])) {
+            eprintln!("[{table}] 签到结果滚动裁剪删除失败（{pk}）：{e}，过期行留待下次裁剪");
+        }
+    }
+    Ok(())
+}
+
+pub fn officeace_checkin_results_upsert(s: &Store, rec: &Value) -> Result<(), String> {
+    checkin_results_upsert_into(s, "officeace_checkin_results", rec)
+}
+
+pub fn lobsterai_checkin_results_upsert(s: &Store, rec: &Value) -> Result<(), String> {
+    checkin_results_upsert_into(s, "lobsterai_checkin_results", rec)
+}
+
+/// 最近 `days` 天的签到结果（pk 前缀为日期，字符串比较即时间序）。
+pub fn checkin_results_since(s: &Store, table: &str, days: i64) -> Result<Vec<Value>, String> {
+    ensure_result_table(table)?;
+    let cutoff = (chrono::Local::now().date_naive() - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string();
+    Ok(s.rows_all(table)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(pk, _)| pk.split('|').next().unwrap_or("") >= cutoff.as_str())
+        .map(|(_, data)| data)
+        .collect())
+}

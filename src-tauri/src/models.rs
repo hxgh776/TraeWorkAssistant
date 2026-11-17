@@ -410,6 +410,19 @@ pub struct Settings {
     /// Qoder 每日签到调度触发时刻 HH:MM（默认 10:15：单次覆盖 0 点签到与 10:00 登录奖励双活动，§2.2）
     #[serde(default = "default_qoder_checkin_hhmm")]
     pub qoder_checkin_hhmm: String,
+    // ── OfficeAce（华为果办）/ LobsterAI（网易有道龙虾）：本机登录态自动签到 ──
+    /// OfficeAce 每日签到调度开关（默认开；签到复用桌面端登录态，凭证约 2 小时有效）
+    #[serde(default = "default_true")]
+    pub officeace_checkin_enabled: bool,
+    /// OfficeAce 每日签到触发时刻 HH:MM（默认 09:40，错峰 Qoder 10:15）
+    #[serde(default = "default_officeace_checkin_hhmm")]
+    pub officeace_checkin_hhmm: String,
+    /// LobsterAI 每日签到调度开关（默认开）
+    #[serde(default = "default_true")]
+    pub lobsterai_checkin_enabled: bool,
+    /// LobsterAI 每日签到触发时刻 HH:MM（默认 09:50）
+    #[serde(default = "default_lobsterai_checkin_hhmm")]
+    pub lobsterai_checkin_hhmm: String,
     /// Qoder 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:40）
     #[serde(default = "default_qoder_credits_sync_hhmm")]
     pub qoder_credits_sync_hhmm: String,
@@ -469,7 +482,7 @@ pub struct Settings {
 /// 的写入侧（settings_set C4 校验）与读取侧（state.rs 归一）共用，杜绝多处
 /// 硬编码漂移——新增应用时仅需改此处与前端 APP_TABS
 pub fn is_valid_app_key(k: &str) -> bool {
-    matches!(k, "trae" | "buddy" | "qoder" | "doubao" | "buddy-ai")
+    matches!(k, "trae" | "buddy" | "qoder" | "doubao" | "buddy-ai" | "officeace" | "lobsterai")
 }
 
 fn default_api_port() -> u16 {
@@ -557,6 +570,14 @@ fn default_buddy_ai_catalog_sync_hhmm() -> String {
 /// Qoder 每日签到调度默认 10:15（F-80 §2.2：10:15 时 0 点签到与 10:00 登录奖励均可领）
 fn default_qoder_checkin_hhmm() -> String {
     "10:15".into()
+}
+/// OfficeAce 每日签到默认 09:40（错峰 Trae 09:00 / WB 09:10 / 豆包 09:15）
+fn default_officeace_checkin_hhmm() -> String {
+    "09:40".into()
+}
+/// LobsterAI 每日签到默认 09:50
+fn default_lobsterai_checkin_hhmm() -> String {
+    "09:50".into()
 }
 fn default_qoder_credits_sync_hhmm() -> String {
     "23:40".into()

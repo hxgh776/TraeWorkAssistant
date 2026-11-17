@@ -32,6 +32,8 @@ pub mod scheduler;
 pub mod trae_checkin;
 pub mod ui_click;
 pub mod buddy_ai_checkin;
+pub mod lobsterai_checkin;
+pub mod officeace_checkin;
 pub mod wb_checkin;
 pub mod wb_common;
 pub mod wb_credits;
@@ -207,6 +209,52 @@ pub fn run_cli_task(name: &str, state: &AppState) -> i32 {
         "qoder-refresh" => qoder_refresh::run_task(state),
         // Qoder 模型目录每日同步（调度器/CLI 共用；空池/无凭证空转，p3-3 收尾）
         "qoder-catalog-sync" => qoder_catalog::run_task(state),
+        // OfficeAce（华为果办）每日签到（本机登录态单账号；CLI 与 GUI 跨进程互斥）
+        "officeace-checkin" => match crate::tasks::qoder_common::CrossProcLock::try_acquire_ns(
+            &state.data_dir,
+            "officeace",
+            "round",
+            0,
+        ) {
+            (Some(_round), _) => {
+                let done = officeace_checkin::run_checkin_round(state, &mut print_progress);
+                let failed = done.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                if failed > 0 {
+                    let ok = done.get("ok").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                    Err(format!("OfficeAce 签到：{ok} 成功 / {failed} 失败"))
+                } else {
+                    Ok(done)
+                }
+            }
+            (None, reason) => Ok(serde_json::json!({
+                "ok": true,
+                "skipped": format!("另一进程正在执行 OfficeAce 签到，本轮跳过（{}）", reason.map(|r| r.describe()).unwrap_or_default()),
+                "skipped_busy": true
+            })),
+        },
+        // LobsterAI（网易有道龙虾）每日签到（本机登录态单账号；CLI 与 GUI 跨进程互斥）
+        "lobsterai-checkin" => match crate::tasks::qoder_common::CrossProcLock::try_acquire_ns(
+            &state.data_dir,
+            "lobsterai",
+            "round",
+            0,
+        ) {
+            (Some(_round), _) => {
+                let done = lobsterai_checkin::run_checkin_round(state, &mut print_progress);
+                let failed = done.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                if failed > 0 {
+                    let ok = done.get("ok").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                    Err(format!("LobsterAI 签到：{ok} 成功 / {failed} 失败"))
+                } else {
+                    Ok(done)
+                }
+            }
+            (None, reason) => Ok(serde_json::json!({
+                "ok": true,
+                "skipped": format!("另一进程正在执行 LobsterAI 签到，本轮跳过（{}）", reason.map(|r| r.describe()).unwrap_or_default()),
+                "skipped_busy": true
+            })),
+        },
         // Buddy 国际版积分数据同步 / 凭证兜底续期 / 模型目录同步（调度器/CLI 共用；
         // runtime=None：CLI 独立进程无网关运行态，仅落库不做运行池拨新）
         "buddy-ai-credits-sync" => crate::commands::workbuddy::buddy_ai_credits_sync_impl(state, None)

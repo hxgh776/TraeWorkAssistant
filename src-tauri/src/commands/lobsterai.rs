@@ -18,6 +18,15 @@ pub fn lobsterai_status() -> lobsterai_checkin::LobsterAiStatus {
     lobsterai_checkin::status()
 }
 
+/// 积分 / 连签数据（只读 client-activities context，与签到同一份本机登录态）。
+/// 上游不可达或登录态缺失时返回 Err——前端展示错误，禁止用 0 冒充；
+/// 上游未下发余额字段时 balance 缺省（前端显示「未知」）。
+/// 不写回、不落盘凭据、错误文案不含令牌。
+#[tauri::command(async)]
+pub fn lobsterai_quota() -> Result<lobsterai_checkin::LobsterAiQuota, String> {
+    lobsterai_checkin::quota()
+}
+
 #[tauri::command(async)]
 pub fn lobsterai_checkin_start(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     let round = lobsterai_checkin::try_acquire_round()?;

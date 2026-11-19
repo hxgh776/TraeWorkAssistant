@@ -736,6 +736,76 @@ fn gained_between(before: &Value, after: &Value) -> f64 {
         .sum()
 }
 
+// ── 积分余量（只读 /v1/subscription，签到同一份本机登录态） ─────────────────
+
+/// 订阅奖励余量单活动条目（bonus_skus）。
+#[derive(Serialize, Clone)]
+pub struct OfficeAceQuotaItem {
+    /// 活动标识（activity_id / cbc_resource_id / activity_name 兜底，与 bonuses_of 同口径）
+    pub activity: String,
+    pub total: f64,
+    pub used: f64,
+    pub remaining: f64,
+}
+
+/// 积分余量查询结果（脱敏：不含凭据与签名材料）。
+#[derive(Serialize, Clone)]
+pub struct OfficeAceQuota {
+    pub user_id: String,
+    pub name: String,
+    pub items: Vec<OfficeAceQuotaItem>,
+    pub total: f64,
+    pub used: f64,
+    pub remaining: f64,
+    /// 本地查询时刻（YYYY-MM-DD HH:MM:SS）
+    pub fetched_at: String,
+}
+
+/// 读取当前订阅奖励余量。上游不可达 / 登录态缺失时返回 Err——调用方（前端）
+/// 必须展示错误而不是 0，禁止用 0 冒充余额。
+pub fn quota() -> Result<OfficeAceQuota, String> {
+    let Some((account, _)) = local_account()? else {
+        return Err("未检测到 OfficeAce 本机登录态：请先安装并登录 OfficeAce 桌面端".into());
+    };
+    let subscription = fetch_subscription(&account)?;
+    quota_from_subscription(&account, &subscription)
+}
+
+/// 订阅响应 → 余量结构（bonus_skus 缺失视为取不到，返回 Err；空数组如实返回空明细）。
+fn quota_from_subscription(account: &LocalAccount, subscription: &Value) -> Result<OfficeAceQuota, String> {
+    let Some(raw_items) = subscription.get("bonus_skus").and_then(Value::as_array) else {
+        return Err("订阅响应缺少 bonus_skus 字段，无法读取积分余量".into());
+    };
+    let mut items = Vec::new();
+    for item in raw_items {
+        let activity = text_of(item, &["activity_id", "cbc_resource_id", "activity_name"]);
+        if activity.is_empty() {
+            continue;
+        }
+        // points = 累计额度，current_value = 已用；剩余 = (points - current_value) 截非负（bonuses_of 同口径）
+        let total = num(item.get("points"));
+        let used = num(item.get("current_value"));
+        items.push(OfficeAceQuotaItem {
+            activity,
+            total,
+            used,
+            remaining: (total - used).max(0.0),
+        });
+    }
+    let total = items.iter().map(|i| i.total).sum();
+    let used = items.iter().map(|i| i.used).sum();
+    let remaining = items.iter().map(|i| i.remaining).sum();
+    Ok(OfficeAceQuota {
+        user_id: account.user_id.clone(),
+        name: account.name.clone(),
+        items,
+        total,
+        used,
+        remaining,
+        fetched_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    })
+}
+
 // ── 签到轮次 ────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Clone)]
@@ -941,5 +1011,33 @@ mod tests {
     fn canonical_uri_forces_trailing_slash() {
         assert_eq!(canonical_uri("/v1/subscription/bonus/claim"), "/v1/subscription/bonus/claim/");
         assert_eq!(canonical_uri("/"), "/");
+    }
+
+    #[test]
+    fn quota_from_subscription_sums_items_and_errors_without_bonus_skus() {
+        let account = account_from_state(&json!({
+            "providerState": {
+                "userId": "org:user",
+                "userName": "测试账号",
+                "modelInfo": { "model_api_url_base": "https://modelgw.example.com" },
+                "credential": { "access": "AK", "secret": "SK" }
+            }
+        }))
+        .expect("应能解析");
+        let subscription = json!({ "bonus_skus": [
+            { "activity_id": "daily", "points": "100", "current_value": "30" },
+            { "activity_name": "新人礼", "points": 500, "current_value": 600 }
+        ]});
+        let quota = quota_from_subscription(&account, &subscription).expect("应能解析");
+        assert_eq!(quota.items.len(), 2);
+        assert_eq!(quota.items[0].remaining, 70.0);
+        // 剩余截非负（已用超额度不出现负数）
+        assert_eq!(quota.items[1].remaining, 0.0);
+        assert_eq!(quota.total, 600.0);
+        assert_eq!(quota.used, 630.0);
+        assert_eq!(quota.remaining, 70.0);
+        assert_eq!(quota.user_id, "org:user");
+        // bonus_skus 缺失 = 取不到，必须 Err（禁止 0 冒充）
+        assert!(quota_from_subscription(&account, &json!({})).is_err());
     }
 }

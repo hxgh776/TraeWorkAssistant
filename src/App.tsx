@@ -40,6 +40,14 @@ import ApiManagerModal from './components/api/ApiManagerModal';
 import TraeWorkMigrationGuide from './components/TraeWorkMigrationGuide';
 import OfficeAceCheckin from './pages/officeace/OfficeAceCheckin';
 import LobsterAiCheckin from './pages/lobsterai/LobsterAiCheckin';
+import OfficeAceOverview from './pages/officeace/OfficeAceOverview';
+import OfficeAceAccounts from './pages/officeace/OfficeAceAccounts';
+import OfficeAceCredits from './pages/officeace/OfficeAceCredits';
+import OfficeAceSettings from './pages/officeace/OfficeAceSettings';
+import LobsterAiOverview from './pages/lobsterai/LobsterAiOverview';
+import LobsterAiAccounts from './pages/lobsterai/LobsterAiAccounts';
+import LobsterAiCredits from './pages/lobsterai/LobsterAiCredits';
+import LobsterAiSettings from './pages/lobsterai/LobsterAiSettings';
 
 function renderView(view: string) {
   switch (view) {
@@ -105,10 +113,26 @@ function renderView(view: string) {
       return <BuddyAiApiService />;
     case 'buddyai-settings':
       return <BuddyAiSettings />;
+    case 'officeace-overview':
+      return <OfficeAceOverview />;
+    case 'officeace-accounts':
+      return <OfficeAceAccounts />;
     case 'officeace-checkin':
       return <OfficeAceCheckin />;
+    case 'officeace-credits':
+      return <OfficeAceCredits />;
+    case 'officeace-settings':
+      return <OfficeAceSettings />;
+    case 'lobsterai-overview':
+      return <LobsterAiOverview />;
+    case 'lobsterai-accounts':
+      return <LobsterAiAccounts />;
     case 'lobsterai-checkin':
       return <LobsterAiCheckin />;
+    case 'lobsterai-credits':
+      return <LobsterAiCredits />;
+    case 'lobsterai-settings':
+      return <LobsterAiSettings />;
     default:
       return <Dashboard />;
   }

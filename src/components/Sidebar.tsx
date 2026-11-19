@@ -77,34 +77,39 @@ const BUDDYAI_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
   { key: 'buddyai-settings', label: '环境配置', icon: Settings },
 ];
 
-/** OfficeAce（华为果办）应用菜单：本机登录态自动签到（单页） */
+/** OfficeAce（华为果办）应用菜单：本机登录态自动签到（五页，无资源调度——无网关池） */
 const OFFICEACE_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
+  { key: 'officeace-overview', label: '概述', icon: LayoutDashboard },
+  { key: 'officeace-accounts', label: '账号管理', icon: Users },
   { key: 'officeace-checkin', label: '每日签到', icon: CalendarCheck },
+  { key: 'officeace-credits', label: '积分看板', icon: Coins },
+  { key: 'officeace-settings', label: '环境配置', icon: Settings },
 ];
 
-/** LobsterAI（网易有道龙虾）应用菜单：本机登录态自动签到（单页） */
+/** LobsterAI（网易有道龙虾）应用菜单：本机登录态自动签到（五页，无资源调度——无网关池） */
 const LOBSTERAI_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
+  { key: 'lobsterai-overview', label: '概述', icon: LayoutDashboard },
+  { key: 'lobsterai-accounts', label: '账号管理', icon: Users },
   { key: 'lobsterai-checkin', label: '每日签到', icon: PlayCircle },
+  { key: 'lobsterai-credits', label: '积分看板', icon: Coins },
+  { key: 'lobsterai-settings', label: '环境配置', icon: Settings },
 ];
 
 /** 应用切换 Tab：trae = 当前菜单；buddy = 批次1接入；qoder = F-80 接入；doubao = 接入中；
  *  buddy-ai = 国际版独立池（默认隐藏，系统设置-应用显示 opt-in）；
- *  officeace / lobsterai = 本机登录态自动签到（单页） */
+ *  officeace / lobsterai = 本机登录态自动签到（五页） */
 export const APP_TABS: { key: AppKey; label: string; icon: typeof Users; disabled?: boolean; title?: string }[] = [
   { key: 'trae', label: 'Trae', icon: Sparkles },
   { key: 'buddy', label: 'Buddy', icon: Bot, title: 'WorkBuddy / CodeBuddy' },
   { key: 'qoder', label: 'Qoder', icon: Boxes, title: 'Qoder CN（Qoder CN IDE / Qoder CN / CLI）' },
   { key: 'doubao', label: '豆包', icon: LayoutGrid },
   { key: 'buddy-ai', label: 'BuddyAI', icon: Globe, title: 'Buddy 国际版（buddy-ai 独立池）' },
-  { key: 'officeace', label: '果办', icon: CalendarCheck, title: '华为 OfficeAce（果办）每日签到' },
-  { key: 'lobsterai', label: '龙虾', icon: PlayCircle, title: 'LobsterAI（网易有道龙虾）每日签到' },
+  { key: 'officeace', label: 'OfficeAce', icon: CalendarCheck, title: '华为 OfficeAce（果办）每日签到' },
+  { key: 'lobsterai', label: 'LobsterAI', icon: PlayCircle, title: 'LobsterAI（网易有道龙虾）每日签到' },
 ];
 
 /** 全部合法应用 key（settings 脏值兜底用） */
 export const APP_KEYS = APP_TABS.map((t) => t.key);
-
-/** 栅格列数必须使用字面量，Tailwind JIT 才能扫描生成（应用 Tab 最多 4 列，>4 个折两行） */
-const GRID_COLS = ['grid-cols-1', 'grid-cols-2', 'grid-cols-3', 'grid-cols-4'] as const;
 
 export default function Sidebar({
   view,
@@ -131,9 +136,6 @@ export default function Sidebar({
     return tab && isAppVisible(settings, key) ? [tab] : [];
   });
 
-  // 应用 Tab 自适应列数：≤4 个单行铺满；>4 个固定 4 列自动折两行（按顺序排列：5→4+1 / 6→4+2 / 7→4+3 / 8→4+4）
-  const tabCols = Math.min(4, Math.max(1, visibleTabs.length));
-
   // 当前激活应用被隐藏（或固定项变更）时自动回落固定应用主页，避免停留在无 Tab 的应用
   useEffect(() => {
     if (!visibleTabs.some((t) => t.key === activeApp)) {
@@ -144,8 +146,8 @@ export default function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeApp, pinnedApp, settings?.hidden_apps, settings?.buddy_ai_visible]);
 
-  // 按当前应用切换菜单：Trae → 现有 6 页；豆包 → 3 页；Buddy → 6 页；Qoder → 6 页（F-80）；
-  // BuddyAI → 6 页；OfficeAce / LobsterAI → 单页（每日签到）
+  // 按当前应用切换菜单：Trae → 现有 6 页；豆包 → 5 页；Buddy → 6 页；Qoder → 6 页（F-80）；
+  // BuddyAI → 6 页；OfficeAce / LobsterAI → 5 页（概述/账号管理/每日签到/积分看板/环境配置）
   const nav =
     activeApp === 'doubao'
       ? DOUBAO_NAV
@@ -200,12 +202,9 @@ export default function Sidebar({
       </nav>
       {/* 应用切换 Tab（位于左下角工具图标行上方；显示项由系统设置「应用显示」控制） */}
       <div className="border-t border-slate-200 p-3 dark:border-zinc-800">
-        <div
-          className={cn(
-            'grid gap-1 rounded-lg bg-slate-100 p-1 dark:bg-zinc-900',
-            GRID_COLS[tabCols - 1] ?? 'grid-cols-4',
-          )}
-        >
+        {/* flex-wrap 按内容自然宽度排布（原 4 等列栅格装不下 OfficeAce/LobsterAI 这类
+            9 字符英文 Tab 名，会横向溢出互相压字）；min-w 对齐短名按钮的视觉宽度 */}
+        <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
           {visibleTabs.map((tab) => {
             // 自定义图标优先（系统设置「应用图标」），非法/缺失回退 APP_TABS 内置图标
             const TabIcon = resolveAppIcon(settings?.app_icons?.[tab.key]) ?? tab.icon;
@@ -217,7 +216,7 @@ export default function Sidebar({
                 onClick={() => setActiveApp(tab.key)}
                 title={tab.title ?? tab.label}
                 className={cn(
-                  'flex flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[11px] font-medium transition active:scale-[0.97]',
+                  'flex min-w-[46px] flex-col items-center gap-0.5 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition active:scale-[0.97]',
                   tab.disabled && 'cursor-not-allowed opacity-40',
                   active
                     ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'

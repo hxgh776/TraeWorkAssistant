@@ -36,9 +36,18 @@ export type ViewKey =
   | 'buddyai-credits'
   | 'buddyai-api-service'
   | 'buddyai-settings'
-  // OfficeAce（华为果办）/ LobsterAI（网易有道龙虾）：本机登录态自动签到，单页
+  // OfficeAce（华为果办）/ LobsterAI（网易有道龙虾）：本机登录态自动签到（五页子导航，
+  // 对齐其他应用「概述 / 账号管理 / 每日签到 / 积分看板 / 环境配置」；不补资源调度——无网关池）
+  | 'officeace-overview'
+  | 'officeace-accounts'
   | 'officeace-checkin'
-  | 'lobsterai-checkin';
+  | 'officeace-credits'
+  | 'officeace-settings'
+  | 'lobsterai-overview'
+  | 'lobsterai-accounts'
+  | 'lobsterai-checkin'
+  | 'lobsterai-credits'
+  | 'lobsterai-settings';
 
 /** 侧边栏应用切换（左下角 Tab）：Trae 当前菜单 / Buddy / Qoder（F-80）/ 豆包 / BuddyAI（buddy-ai 国际版） */
 export type AppKey =
@@ -57,8 +66,8 @@ export const APP_HOME_VIEW: Record<AppKey, ViewKey> = {
   qoder: 'qoder-overview',
   doubao: 'doubao-overview',
   'buddy-ai': 'buddyai-overview',
-  officeace: 'officeace-checkin',
-  lobsterai: 'lobsterai-checkin',
+  officeace: 'officeace-overview',
+  lobsterai: 'lobsterai-overview',
 };
 
 
@@ -2103,6 +2112,44 @@ export interface LocalCheckinRecord {
   status: string;
   message: string;
   reward?: number | null;
+}
+
+/** OfficeAce 订阅奖励余量条目（/v1/subscription bonus_skus 单活动） */
+export interface OfficeAceQuotaItem {
+  /** 活动标识（activity_id / cbc_resource_id / activity_name 兜底取值） */
+  activity: string;
+  total: number;
+  used: number;
+  remaining: number;
+}
+
+/** OfficeAce 积分余量（只读 /v1/subscription；上游不可达时命令返回 Err，前端展示错误而非 0） */
+export interface OfficeAceQuota {
+  user_id: string;
+  name: string;
+  items: OfficeAceQuotaItem[];
+  total: number;
+  used: number;
+  remaining: number;
+  fetched_at: string;
+}
+
+/** LobsterAI 积分 / 连签数据（client-activities context 只读） */
+export interface LobsterAiQuota {
+  user_id: string;
+  name: string;
+  /** 签到活动 code（上游未投放活动时为空串） */
+  activity_code: string;
+  claimed_today: boolean;
+  claimed_days: number;
+  streak_days: number;
+  /** 活动总天数（上游未下发为 0） */
+  total_days: number;
+  /** context 下发的可用动作（含 check_in = 今日可签） */
+  actions: string[];
+  /** 当前积分余额（上游未下发余额字段时缺省，前端显示「未知」而非 0） */
+  balance?: number | null;
+  fetched_at: string;
 }
 
 /** 签到进度事件（NDJSON 字符串解析后） */

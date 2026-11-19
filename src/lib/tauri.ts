@@ -3,7 +3,9 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   LocalCheckinRecord,
   OfficeAceStatus,
+  OfficeAceQuota,
   LobsterAiStatus,
+  LobsterAiQuota,
   AccountView,
   ApiServiceStatus,
   BuddyAiAccountView,
@@ -185,12 +187,16 @@ export const api = {
     checkinStart: () => invoke<void>('officeace_checkin_start'),
     checkinResults: (days = 30) =>
       invoke<LocalCheckinRecord[]>('officeace_checkin_results', { days }),
+    // 只读积分余量（/v1/subscription）；上游不可达时 reject（前端展示错误，不用 0 冒充）
+    quota: () => invoke<OfficeAceQuota>('officeace_quota'),
   },
   lobsterai: {
     status: () => invoke<LobsterAiStatus>('lobsterai_status'),
     checkinStart: () => invoke<void>('lobsterai_checkin_start'),
     checkinResults: (days = 30) =>
       invoke<LocalCheckinRecord[]>('lobsterai_checkin_results', { days }),
+    // 只读积分 / 连签数据（client-activities context）；同上，失败如实报错
+    quota: () => invoke<LobsterAiQuota>('lobsterai_quota'),
   },
   env: {
     // TraeWork 合并后唯一客户端检测（原 env_check 已删，统一走 Trae CN 通道）

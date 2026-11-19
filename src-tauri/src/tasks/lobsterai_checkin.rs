@@ -435,6 +435,107 @@ fn do_checkin(account: &LocalAccount) -> (String, String, Option<f64>) {
     ("success".to_string(), message, Some(granted).filter(|v| *v > 0.0))
 }
 
+// ── 积分 / 连签数据（只读，签到同一份本机登录态） ────────────────────────────
+
+/// 积分 / 连签查询结果（client-activities context；脱敏：不含令牌）。
+#[derive(Serialize, Clone)]
+pub struct LobsterAiQuota {
+    pub user_id: String,
+    pub name: String,
+    /// 签到活动 code（上游未投放活动时为空串）
+    pub activity_code: String,
+    pub claimed_today: bool,
+    pub claimed_days: i64,
+    pub streak_days: i64,
+    /// 活动总天数（上游未下发为 0）
+    pub total_days: i64,
+    /// context 下发的可用动作（含 check_in = 今日可签）
+    pub actions: Vec<String>,
+    /// 当前积分余额（上游未下发余额字段时 None，前端显示「未知」而非 0）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub balance: Option<f64>,
+    /// 本地查询时刻（YYYY-MM-DD HH:MM:SS）
+    pub fetched_at: String,
+}
+
+/// 余额字段宽容提取：只认明确表示余额的键（credits / balance 系），
+/// 认不出返回 None——不猜、不冒充 0。
+fn balance_of(state: &Value) -> Option<f64> {
+    const KEYS: [&str; 5] = ["credits", "creditsBalance", "creditBalance", "balance", "remainCredits"];
+    for key in KEYS {
+        let Some(value) = state.get(key) else { continue };
+        let parsed = match value {
+            Value::Number(n) => n.as_f64(),
+            Value::String(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        };
+        if let Some(v) = parsed.filter(|v| *v >= 0.0 && v.is_finite()) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// 读取积分 / 连签数据。上游不可达 / 登录态缺失时返回 Err——调用方必须展示
+/// 错误而不是 0；上游未下发余额字段时 balance=None（如实「未知」）。
+pub fn quota() -> Result<LobsterAiQuota, String> {
+    let Some(account) = local_account()? else {
+        return Err("未检测到 LobsterAI 本机登录态：请先安装并登录 LobsterAI 桌面端".into());
+    };
+    if let Some(exp) = account.token_expires_at {
+        if exp <= chrono::Utc::now().timestamp() {
+            return Err("登录态已过期：请打开 LobsterAI 桌面端（会自动续期）后重试".into());
+        }
+    }
+    quota_from_context(&account)
+}
+
+fn quota_from_context(account: &LocalAccount) -> Result<LobsterAiQuota, String> {
+    let version = client_version();
+    let slot_path = format!(
+        "/api/client-activities/slot?placement={PLACEMENT_SLOT}&clientVersion={version}&containerApiVersion=2&platform=win32"
+    );
+    let slot = api_get(account, &version, &slot_path)?;
+    let activity = slot.get("activity").cloned().unwrap_or(Value::Null);
+    let slot_state = text_of(&slot, &["slotState"]);
+    if activity.is_null() || (!slot_state.is_empty() && slot_state != "available") {
+        return Err(format!("上游未投放签到活动（slotState={slot_state}），无法读取积分数据"));
+    }
+    let code = text_of(&activity, &["activityCode"]);
+    if code.is_empty() {
+        return Err("签到活动缺少 activityCode，无法读取积分数据".into());
+    }
+    let revision = activity.get("configRevision").and_then(Value::as_i64).unwrap_or(0);
+    let ctx = api_get(
+        account,
+        &version,
+        &format!("/api/client-activities/{code}/context?configRevision={revision}"),
+    )?;
+    let state = ctx.get("state").cloned().unwrap_or(Value::Null);
+    let mut streak = int_of(state.get("streakDays"));
+    if streak == 0 {
+        streak = int_of(state.get("streak"));
+    }
+    Ok(LobsterAiQuota {
+        user_id: account.user_id.clone(),
+        name: account.name.clone(),
+        activity_code: code,
+        claimed_today: state
+            .get("claimedToday")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        claimed_days: int_of(state.get("claimedDays")),
+        streak_days: streak,
+        total_days: int_of(state.get("totalDays")),
+        actions: str_list(ctx.get("actions"))
+            .into_iter()
+            .map(|action| action.to_string())
+            .collect(),
+        balance: balance_of(&state),
+        fetched_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    })
+}
+
 // ── 签到轮次 ────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Clone)]
@@ -596,5 +697,17 @@ mod tests {
         let token = format!("{header}.{payload}.sig");
         assert_eq!(jwt_uid(&token), "170764");
         assert_eq!(jwt_exp(&token), Some(1893456000));
+    }
+
+    #[test]
+    fn balance_of_reads_known_keys_only_and_never_invents_zero() {
+        assert_eq!(balance_of(&json!({ "credits": 120 })), Some(120.0));
+        assert_eq!(balance_of(&json!({ "creditsBalance": "88.5" })), Some(88.5));
+        assert_eq!(balance_of(&json!({ "balance": 0 })), Some(0.0));
+        // 未知字段名 / 负值 / 非数字：认不出就 None（如实「未知」，不冒充 0）
+        assert_eq!(balance_of(&json!({ "claimedDays": 3 })), None);
+        assert_eq!(balance_of(&json!({ "credits": -5 })), None);
+        assert_eq!(balance_of(&json!({ "credits": "abc" })), None);
+        assert_eq!(balance_of(&json!({})), None);
     }
 }

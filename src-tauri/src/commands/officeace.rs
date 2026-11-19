@@ -20,6 +20,14 @@ pub fn officeace_status() -> officeace_checkin::OfficeAceStatus {
     officeace_checkin::status()
 }
 
+/// 积分余量（只读 /v1/subscription，与签到同一份本机登录态）：bonus_skus 逐活动
+/// total/used/remaining 与汇总。上游不可达或登录态缺失时返回 Err——前端展示错误，
+/// 禁止用 0 冒充。不写回、不落盘凭据、错误文案不含 AK/SK/STS。
+#[tauri::command(async)]
+pub fn officeace_quota() -> Result<officeace_checkin::OfficeAceQuota, String> {
+    officeace_checkin::quota()
+}
+
 /// 发起签到（单账号本机登录态；进程内轮次锁互斥 + 工作线程 + exit 收尾）。
 #[tauri::command(async)]
 pub fn officeace_checkin_start(app: AppHandle, state: State<AppState>) -> Result<(), String> {

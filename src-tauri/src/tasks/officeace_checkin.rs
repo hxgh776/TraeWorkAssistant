@@ -34,6 +34,8 @@ const SIGN_REGION: &str = "cn-southwest-2";
 const SCOPE_SERVICE: &str = "apic";
 const EXPIRY_MARGIN_MS: i64 = 30 * 60 * 1000;
 const EMPTY_BODY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+/// 登录态/凭证过期时的可执行指引（预检与上游归类共用同一口径）。
+const RELOGIN_HINT: &str = "请打开 OfficeAce 客户端重新登录后再签到";
 
 /// 本机登录态（脱敏视图；凭证字段不参与序列化）。
 #[derive(Serialize, Clone, Default)]
@@ -45,9 +47,11 @@ pub struct OfficeAceStatus {
     /// 会话到期时刻（ISO 8601，来自本机 session 记录）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_expires_at: Option<String>,
+    /// 登录会话是否已过期（与签到预检同口径；过期时 logged_in=false）
+    pub session_expired: bool,
     /// 控制面临时凭证到期时刻（Unix 毫秒；0 = 未知）
     pub credential_expires_at: Option<i64>,
-    /// 凭证是否仍在有效期内（含 30 分钟余量）
+    /// 凭证是否仍在有效期内（含 30 分钟余量；登录会话过期时一并视为不新鲜）
     pub credential_fresh: bool,
     /// 网关主机（不含 scheme 与路径）
     pub gateway_host: String,
@@ -280,6 +284,28 @@ fn parse_time_ms(text: &str) -> Option<i64> {
     None
 }
 
+/// 登录会话记录的 `expiresAt` 是否已过期：过期返回到期时刻（毫秒）。
+/// 字段缺失 / 无法解析时返回 None（不判过期——宁可不拦，不能误拦新会话）。
+fn session_expired_at(session_expires_at: Option<&str>, now: i64) -> Option<i64> {
+    let text = session_expires_at.map(str::trim).filter(|s| !s.is_empty())?;
+    let ms = parse_time_ms(text)?;
+    if ms > 0 && ms <= now {
+        Some(ms)
+    } else {
+        None
+    }
+}
+
+/// 过期时刻本地展示：`YYYY-MM-DD HH:MM`（与用户在本机看到的时间一致）。
+fn local_time_text(ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local
+        .timestamp_millis_opt(ms)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| ms.to_string())
+}
+
 /// provider-state JSON → 本机账号（缺关键字段时返回可读错误）。
 fn account_from_state(state: &Value) -> Result<LocalAccount, String> {
     let ps = state.get("providerState").unwrap_or(state);
@@ -379,18 +405,26 @@ pub fn status() -> OfficeAceStatus {
     }
     match local_account() {
         Ok(Some((account, session_expires_at))) => {
-            let fresh = account.control.expires_at_ms > 0
+            let session_expired_ms = session_expired_at(session_expires_at.as_deref(), now_ms());
+            let session_expired = session_expired_ms.is_some();
+            let fresh = !session_expired
+                && account.control.expires_at_ms > 0
                 && account.control.expires_at_ms - EXPIRY_MARGIN_MS > now_ms();
             OfficeAceStatus {
                 installed: true,
-                logged_in: true,
+                // 登录会话已过期 = 登录态失效：与签到预检同口径，
+                // 前端据此显示重新登录指引而不是「凭证临期」
+                logged_in: !session_expired,
                 user_id: account.user_id,
                 name: account.name,
                 session_expires_at,
+                session_expired,
                 credential_expires_at: Some(account.control.expires_at_ms).filter(|v| *v > 0),
                 credential_fresh: fresh,
                 gateway_host: account.gateway_host,
-                error: None,
+                error: session_expired_ms.map(|ms| {
+                    format!("OfficeAce 登录态已于 {} 过期，{RELOGIN_HINT}", local_time_text(ms))
+                }),
             }
         }
         Ok(None) => OfficeAceStatus {
@@ -620,6 +654,36 @@ fn control_request(
     }
 }
 
+/// 上游 HTTP 400 响应体是否表示凭证/登录态过期。APIG 网关对过期 security
+/// token 返回 400（而非 401），body 带 `APIG.0602` /
+/// `security token has expired`（大小写不敏感）。
+fn is_token_expired_response(status: u16, raw: &str) -> bool {
+    if status != 400 {
+        return false;
+    }
+    let lower = raw.to_lowercase();
+    lower.contains("apig.0602") || lower.contains("security token has expired")
+}
+
+/// 错误文案是否属于「凭证/登录态过期」类（`upstream_failure` 归类后的文案
+/// 自带同一标记）。
+fn is_token_expired_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("apig.0602") || lower.contains("security token has expired")
+}
+
+/// 非 2xx 上游响应 → 错误文案。400 + APIG.0602 / security token has expired
+/// 归类为「凭证/登录态过期」，文案自带 `{RELOGIN_HINT}`，调用方不得再追加
+/// 「请稍后重试」；其余状态码保持通用文案口径。
+fn upstream_failure(stage: &str, status: u16, raw: &str) -> String {
+    if is_token_expired_response(status, raw) {
+        return format!(
+            "{stage}失败（HTTP 400）：上游判定登录态/临时凭证已过期（APIG.0602 security token has expired）；{RELOGIN_HINT}"
+        );
+    }
+    format!("{stage}失败（HTTP {status}）：{}", excerpt(raw))
+}
+
 fn fetch_subscription(account: &LocalAccount) -> Result<Value, String> {
     let (status, parsed, raw) = control_request(
         account,
@@ -633,7 +697,7 @@ fn fetch_subscription(account: &LocalAccount) -> Result<Value, String> {
         reject_error_payload(&value)?;
         return Ok(value);
     }
-    Err(format!("订阅查询失败（HTTP {status}）：{}", excerpt(&raw)))
+    Err(upstream_failure("订阅查询", status, &raw))
 }
 
 fn claim_bonus(account: &LocalAccount) -> Result<Value, String> {
@@ -650,7 +714,7 @@ fn claim_bonus(account: &LocalAccount) -> Result<Value, String> {
         reject_error_payload(&value)?;
         return Ok(value);
     }
-    Err(format!("签到请求失败（HTTP {status}）：{}", excerpt(&raw)))
+    Err(upstream_failure("签到请求", status, &raw))
 }
 
 /// 伪 200 信封防御：HTTP 200 但体内带 error / 非 0 code 时按失败处理（否则会
@@ -760,6 +824,45 @@ pub(crate) fn try_acquire_round() -> Result<tokio::sync::MutexGuard<'static, ()>
         .map_err(|_| "已有 OfficeAce 签到任务在执行中，请等待当前轮次完成".to_string())
 }
 
+/// 签到预检：本机登录会话（session `expiresAt`）或控制面临时凭证
+/// （STS `expires_at_ms`）已过期时返回 fail 文案（含过期时刻与
+/// `{RELOGIN_HINT}`），调用方直接落 fail、不得再发上游请求。
+/// 字段缺失 / 无法解析时不拦截（避免把新会话误判成过期）。
+fn login_state_expired_reason(
+    account: &LocalAccount,
+    session_expires_at: Option<&str>,
+) -> Option<String> {
+    let now = now_ms();
+    if let Some(expired_ms) = session_expired_at(session_expires_at, now) {
+        return Some(format!(
+            "OfficeAce 登录态已于 {} 过期，{RELOGIN_HINT}",
+            local_time_text(expired_ms)
+        ));
+    }
+    if account.control.expires_at_ms > 0 && account.control.expires_at_ms <= now {
+        return Some(format!(
+            "OfficeAce 临时凭证已于 {} 过期，请打开 OfficeAce 客户端刷新登录态后重试（签到复用桌面端登录态，凭证约 2 小时有效）",
+            local_time_text(account.control.expires_at_ms)
+        ));
+    }
+    None
+}
+
+/// claim 失败 → 用户可见文案。凭证/登录态过期类（上游 400 APIG.0602 /
+/// security token has expired）自带重新登录指引，**不追加**「请稍后重试」；
+/// 其余保持现有口径（401/403 → 临时凭证提示，其他 → 请稍后重试）。
+fn claim_failure_message(error_text: String) -> String {
+    if is_token_expired_error(&error_text) {
+        return error_text;
+    }
+    let hint = if error_text.contains("HTTP 401") || error_text.contains("HTTP 403") {
+        "临时凭证已过期：请打开并登录 OfficeAce 桌面端后重试（签到复用桌面端登录态，凭证约 2 小时有效）"
+    } else {
+        "请稍后重试"
+    };
+    format!("{error_text}；{hint}")
+}
+
 /// 执行一轮签到（当前本机登录账号；单账号）。
 pub fn run_checkin_round(state: &AppState, emit: &mut dyn FnMut(&Value)) -> Value {
     emit(&json!({ "type": "start", "total": 1 }));
@@ -767,46 +870,54 @@ pub fn run_checkin_round(state: &AppState, emit: &mut dyn FnMut(&Value)) -> Valu
     let mut already = 0i64;
     let mut failed = 0i64;
     let (status, message, reward, uid, name) = match local_account() {
-        Ok(Some((account, _))) => {
-            let before = fetch_subscription(&account).ok();
-            match claim_bonus(&account) {
-                Ok(claim) => {
-                    let gained = before.as_ref().map(|b| gained_between(b, &claim));
-                    let reward = gained.map(|v| v.floor()).filter(|v| *v > 0.0);
-                    if let Some(points) = reward {
-                        ok = 1;
+        Ok(Some((account, session_expires_at))) => {
+            // 会话/凭证过期预检：过期直接落 fail（含过期时刻与指引），
+            // 不再向上游发注定失败的请求（此前会 400 APIG.0602）
+            if let Some(reason) = login_state_expired_reason(&account, session_expires_at.as_deref()) {
+                failed = 1;
+                (
+                    "fail".to_string(),
+                    reason,
+                    None,
+                    account.user_id.clone(),
+                    account.name.clone(),
+                )
+            } else {
+                let before = fetch_subscription(&account).ok();
+                match claim_bonus(&account) {
+                    Ok(claim) => {
+                        let gained = before.as_ref().map(|b| gained_between(b, &claim));
+                        let reward = gained.map(|v| v.floor()).filter(|v| *v > 0.0);
+                        if let Some(points) = reward {
+                            ok = 1;
+                            (
+                                "success".to_string(),
+                                format!("签到成功 +{points} 积分"),
+                                reward,
+                                account.user_id.clone(),
+                                account.name.clone(),
+                            )
+                        } else {
+                            already = 1;
+                            (
+                                "already".to_string(),
+                                "今日奖励已领取（上游幂等返回，无新增积分）".to_string(),
+                                None,
+                                account.user_id.clone(),
+                                account.name.clone(),
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        failed = 1;
                         (
-                            "success".to_string(),
-                            format!("签到成功 +{points} 积分"),
-                            reward,
-                            account.user_id.clone(),
-                            account.name.clone(),
-                        )
-                    } else {
-                        already = 1;
-                        (
-                            "already".to_string(),
-                            "今日奖励已领取（上游幂等返回，无新增积分）".to_string(),
+                            "fail".to_string(),
+                            claim_failure_message(e),
                             None,
                             account.user_id.clone(),
                             account.name.clone(),
                         )
                     }
-                }
-                Err(e) => {
-                    failed = 1;
-                    let hint = if e.contains("HTTP 401") || e.contains("HTTP 403") {
-                        "临时凭证已过期：请打开并登录 OfficeAce 桌面端后重试（签到复用桌面端登录态，凭证约 2 小时有效）"
-                    } else {
-                        "请稍后重试"
-                    };
-                    (
-                        "fail".to_string(),
-                        format!("{e}；{hint}"),
-                        None,
-                        account.user_id.clone(),
-                        account.name.clone(),
-                    )
                 }
             }
         }
@@ -941,5 +1052,125 @@ mod tests {
     fn canonical_uri_forces_trailing_slash() {
         assert_eq!(canonical_uri("/v1/subscription/bonus/claim"), "/v1/subscription/bonus/claim/");
         assert_eq!(canonical_uri("/"), "/");
+    }
+
+    fn account_with_sts(expires_at_ms: i64) -> LocalAccount {
+        LocalAccount {
+            user_id: "org:user".into(),
+            name: "测试账号".into(),
+            session_expires_at: None,
+            gateway_host: "modelgw.example.com".into(),
+            control: ControlCredential {
+                access_key_id: "AK".into(),
+                secret_access_key: "SK".into(),
+                security_token: "STS".into(),
+                project_id: "PID".into(),
+                expires_at_ms,
+            },
+        }
+    }
+
+    #[test]
+    fn login_state_expired_reason_flags_expired_session_with_time_and_hint() {
+        // 场景还原：本机 session expiresAt = 2026-11-17T15:43:43Z（已过期）
+        let expired = parse_time_ms("2026-11-17T15:43:43Z").expect("应能解析");
+        let account = account_with_sts(now_ms() + 60 * 60 * 1000);
+        let reason = login_state_expired_reason(&account, Some("2026-11-17T15:43:43Z"))
+            .expect("会话已过期应拦截");
+        assert!(reason.contains("OfficeAce 登录态已于"));
+        assert!(reason.contains(&local_time_text(expired)));
+        assert!(reason.contains(RELOGIN_HINT));
+        assert!(!reason.contains("请稍后重试"));
+
+        // 会话未过期、STS 未过期 → 不拦截
+        {
+            use chrono::TimeZone;
+            let future = chrono::Local
+                .timestamp_millis_opt(now_ms() + 60 * 60 * 1000)
+                .single()
+                .expect("应能构造未来时刻");
+            assert!(login_state_expired_reason(&account, Some(&future.to_rfc3339())).is_none());
+        }
+        assert!(login_state_expired_reason(&account, None).is_none());
+
+        // 字段缺失 / 无法解析时不判过期（不得误拦新会话）
+        assert!(login_state_expired_reason(&account, Some("")).is_none());
+        assert!(login_state_expired_reason(&account, Some("not-a-time")).is_none());
+    }
+
+    #[test]
+    fn login_state_expired_reason_flags_expired_sts_token() {
+        // 会话字段缺失但 STS 已过期：同样预检拦截（含过期时刻与指引）
+        let account = account_with_sts(now_ms() - 60 * 1000);
+        let reason =
+            login_state_expired_reason(&account, None).expect("STS 已过期应拦截");
+        assert!(reason.contains("临时凭证已于"));
+        assert!(reason.contains(&local_time_text(now_ms() - 60 * 1000)));
+        assert!(reason.contains("刷新登录态"));
+    }
+
+    #[test]
+    fn upstream_failure_classifies_apig_token_expiry_400() {
+        let raw = r#"{"error_msg":"Bad request: the security token has expired","error_code":"APIG.0602","request_id":"a605aec5094d152e5e9dbed4cdb455b8"}"#;
+        assert!(is_token_expired_response(400, raw));
+        let e = upstream_failure("签到请求", 400, raw);
+        assert!(is_token_expired_error(&e));
+        assert!(e.contains("已过期"));
+        assert!(e.contains(RELOGIN_HINT));
+        assert!(!e.contains("请稍后重试"));
+
+        // 大小写不敏感
+        assert!(is_token_expired_response(400, r#"{"error_code":"apig.0602"}"#));
+        assert!(is_token_expired_response(
+            400,
+            r#"{"error_msg":"Security Token Has Expired"}"#
+        ));
+
+        // 非 400 状态码即使带同标记也不归类（401/403 走原有临时凭证口径）
+        assert!(!is_token_expired_response(401, raw));
+        assert!(!is_token_expired_response(500, raw));
+    }
+
+    #[test]
+    fn upstream_failure_keeps_generic_copy_for_other_400_codes() {
+        // 其他 400 错误码：不归类，仍走通用文案（请稍后重试）
+        let raw = r#"{"error_code":"OfficeAce.11020001","error_msg":"body must be {}"}"#;
+        assert!(!is_token_expired_response(400, raw));
+        let e = upstream_failure("签到请求", 400, raw);
+        assert!(!is_token_expired_error(&e));
+        assert!(e.contains("HTTP 400"));
+        assert!(e.contains("OfficeAce.11020001"));
+        assert_eq!(claim_failure_message(e.clone()), format!("{e}；请稍后重试"));
+    }
+
+    #[test]
+    fn claim_failure_message_routes_expired_and_generic_errors() {
+        // 归类文案（经 upstream_failure 组合，自带标记）：不再追加「请稍后重试」
+        let raw = r#"{"error_msg":"Bad request: the security token has expired","error_code":"APIG.0602"}"#;
+        let expired = upstream_failure("签到请求", 400, raw);
+        assert!(is_token_expired_error(&expired));
+        assert_eq!(claim_failure_message(expired.clone()), expired);
+        assert!(expired.contains(RELOGIN_HINT));
+        assert!(!expired.contains("请稍后重试"));
+
+        // 401/403：保持现有「临时凭证已过期」口径
+        let unauthorized =
+            "签到请求失败（HTTP 401）：unauthorized".to_string();
+        let message = claim_failure_message(unauthorized);
+        assert!(message.contains("临时凭证已过期"));
+        assert!(!message.contains("请稍后重试"));
+    }
+
+    #[test]
+    fn local_time_text_renders_local_calendar_shape() {
+        let ms = parse_time_ms("2026-11-17T15:43:43Z").expect("应能解析");
+        let text = local_time_text(ms);
+        assert_eq!(text.len(), 16, "YYYY-MM-DD HH:MM 共 16 字符");
+        assert_eq!(&text[4..5], "-");
+        assert_eq!(&text[7..8], "-");
+        assert_eq!(&text[10..11], " ");
+        assert_eq!(&text[13..14], ":");
+        // 超出可表示范围回退为原始毫秒值
+        assert_eq!(local_time_text(i64::MAX), i64::MAX.to_string());
     }
 }

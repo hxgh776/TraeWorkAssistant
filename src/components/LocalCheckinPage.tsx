@@ -254,7 +254,7 @@ export default function LocalCheckinPage({ platform }: { platform: Platform }) {
                 <Badge tone="red">未就绪</Badge>
               )}
               {status && 'credential_fresh' in status && !status.credential_fresh && (
-                <Badge tone="amber">凭证临期</Badge>
+                <Badge tone="amber">{status.session_expired ? '登录态过期' : '凭证临期'}</Badge>
               )}
             </div>
             <div className="text-sm text-slate-600 dark:text-zinc-400">

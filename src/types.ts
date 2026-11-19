@@ -2075,9 +2075,11 @@ export interface OfficeAceStatus {
   user_id: string;
   name: string;
   session_expires_at?: string | null;
+  /** 登录会话是否已过期（过期时 logged_in=false，error 带重新登录指引） */
+  session_expired: boolean;
   /** 控制面临时凭证到期时刻（Unix 毫秒；0/缺省 = 未知） */
   credential_expires_at?: number | null;
-  /** 凭证是否仍在有效期内（含 30 分钟余量） */
+  /** 凭证是否仍在有效期内（含 30 分钟余量；登录会话过期时一并视为不新鲜） */
   credential_fresh: boolean;
   gateway_host: string;
   error?: string | null;

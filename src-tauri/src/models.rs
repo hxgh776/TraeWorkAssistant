@@ -423,6 +423,31 @@ pub struct Settings {
     /// LobsterAI 每日签到触发时刻 HH:MM（默认 09:50）
     #[serde(default = "default_lobsterai_checkin_hhmm")]
     pub lobsterai_checkin_hhmm: String,
+    // ── MiniMax Code（双区：minimax CN / minimax-global Global；VENU-36 重建）──
+    /// MiniMax 每日签到调度开关（默认开；双区账号各自签到）
+    #[serde(default = "default_true")]
+    pub minimax_checkin_enabled: bool,
+    /// MiniMax 每日签到触发时刻 HH:MM（默认 00:05：跨零点即可领当日积分，旧 3.9.3 行为基准）
+    #[serde(default = "default_minimax_checkin_hhmm")]
+    pub minimax_checkin_hhmm: String,
+    /// MiniMax 国内区（agent.minimax.cn）账号参与签到与积分同步（默认开）
+    #[serde(default = "default_true")]
+    pub minimax_cn_enabled: bool,
+    /// MiniMax 国际区（agent.minimax.io）账号参与签到与积分同步（默认开；大陆网络直连可能被 307，需代理兜底）
+    #[serde(default = "default_true")]
+    pub minimax_global_enabled: bool,
+    /// MiniMax 签到多账号间隔秒（默认 3s，0 = 关闭；防上游频控）
+    #[serde(default = "default_checkin_gap_secs")]
+    pub minimax_checkin_gap_secs: u64,
+    /// MiniMax 积分数据同步模式：off | hourly | daily | every_hours（每N小时，默认；空 = 旧数据由 state 归一）
+    #[serde(default)]
+    pub minimax_credits_sync_mode: String,
+    /// MiniMax 积分数据同步间隔小时数（every_hours 模式生效，默认 2，1..=24）
+    #[serde(default = "default_credits_sync_hours")]
+    pub minimax_credits_sync_hours: String,
+    /// MiniMax 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:35）
+    #[serde(default = "default_minimax_credits_sync_hhmm")]
+    pub minimax_credits_sync_hhmm: String,
     /// Qoder 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:40）
     #[serde(default = "default_qoder_credits_sync_hhmm")]
     pub qoder_credits_sync_hhmm: String,
@@ -482,7 +507,7 @@ pub struct Settings {
 /// 的写入侧（settings_set C4 校验）与读取侧（state.rs 归一）共用，杜绝多处
 /// 硬编码漂移——新增应用时仅需改此处与前端 APP_TABS
 pub fn is_valid_app_key(k: &str) -> bool {
-    matches!(k, "trae" | "buddy" | "qoder" | "doubao" | "buddy-ai" | "officeace" | "lobsterai")
+    matches!(k, "trae" | "buddy" | "qoder" | "doubao" | "buddy-ai" | "officeace" | "lobsterai" | "minimax")
 }
 
 fn default_api_port() -> u16 {
@@ -578,6 +603,14 @@ fn default_officeace_checkin_hhmm() -> String {
 /// LobsterAI 每日签到默认 09:50
 fn default_lobsterai_checkin_hhmm() -> String {
     "09:50".into()
+}
+/// MiniMax 每日签到默认 00:05（旧 3.9.3 行为基准：跨零点即可领当日积分；VENU-13 验收口径）
+fn default_minimax_checkin_hhmm() -> String {
+    "00:05".into()
+}
+/// MiniMax 积分数据同步 daily 模式默认 23:35（错峰 qoder 23:40 / trae 23:40）
+fn default_minimax_credits_sync_hhmm() -> String {
+    "23:35".into()
 }
 fn default_qoder_credits_sync_hhmm() -> String {
     "23:40".into()

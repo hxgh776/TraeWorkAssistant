@@ -124,6 +124,14 @@ const TASKS: &[SchedTask] = &[
     // lobsterai_checkin_hhmm），开关独立（默认开）
     SchedTask { key: "officeace-checkin", name: "OfficeAce（果办）每日签到", hhmm: "09:40", kind: "fix" },
     SchedTask { key: "lobsterai-checkin", name: "LobsterAI（有道龙虾）每日签到", hhmm: "09:50", kind: "fix" },
+    // MiniMax Code 每日签到（VENU-36 重建，任务名对齐旧 3.9.3 `minimax-checkin`）：
+    // 默认 00:05 跨零点首跑（VENU-13 验收口径；settings.minimax_checkin_hhmm 可改），
+    // 失败日内退避重试；双区账号按区开关（minimax_cn_enabled / minimax_global_enabled）过滤
+    SchedTask { key: "minimax-checkin", name: "MiniMax 每日签到", hhmm: "00:05", kind: "fix" },
+    // MiniMax 积分数据同步（任务名对齐旧 3.9.3 `minimax-credits-sync`）：对齐 Trae/Buddy/Qoder
+    // 看板同步四模式（off/hourly/every_hours/daily，settings.minimax_credits_sync_mode，
+    // 默认 every_hours 每 2 小时，VENU-6 调度口径；daily 时刻默认 23:35 错峰）
+    SchedTask { key: "minimax-credits-sync", name: "MiniMax 积分数据同步", hhmm: "23:35", kind: "credits" },
     // Buddy 国际版模型目录同步（2026-10-16）：/v3/config 直连拉取（动态目录替换，
     // 与 API 服务启动挂点互补）；开关/时刻独立（默认开，05:55 错峰）
     SchedTask { key: "buddy-ai-catalog-sync", name: "Buddy 国际版模型目录同步", hhmm: "05:55", kind: "models" },
@@ -181,6 +189,7 @@ fn credits_sync_mode(st: &AppState, key: &str) -> String {
         "qoder-credits-snapshot" => s.qoder_credits_sync_mode.as_str(),
         "buddy-ai-credits-sync" => s.buddy_ai_credits_sync_mode.as_str(),
         "doubao-sync" => s.doubao_sync_mode.as_str(),
+        "minimax-credits-sync" => s.minimax_credits_sync_mode.as_str(),
         _ => s.trae_credits_sync_mode.as_str(),
     };
     match raw.trim() {
@@ -197,6 +206,7 @@ fn credits_sync_hours(st: &AppState, key: &str) -> i64 {
         "qoder-credits-snapshot" => s.qoder_credits_sync_hours.as_str(),
         "buddy-ai-credits-sync" => s.buddy_ai_credits_sync_hours.as_str(),
         "doubao-sync" => s.doubao_sync_hours.as_str(),
+        "minimax-credits-sync" => s.minimax_credits_sync_hours.as_str(),
         _ => s.trae_credits_sync_hours.as_str(),
     };
     raw.trim().parse::<i64>().unwrap_or(2).clamp(1, 24)
@@ -246,6 +256,9 @@ fn board_platform(key: &str) -> Option<&'static str> {
         // F-80 Qoder 看板与 trae/buddy 同款联动：快照任务写入 qoder_credits_cache
         // 与当日历史后，常驻页面需静默重读（审查修复：此前缺映射致 Qoder 看板滞后）
         "qoder-credits-snapshot" => Some("qoder"),
+        // T3 审查修复同款：MiniMax 积分同步任务写入 minimax_credits_history 与池三键后，
+        // 常驻积分页需静默重读（此前缺映射致看板数据滞后到下次手动刷新）
+        "minimax-credits-sync" => Some("minimax"),
         // T3 审查修复：buddy-ai 积分同步任务写入 buddy_ai_credits_cache 与池快照
         // 后，BuddyAi 看板同款联动（此前缺映射致看板数据滞后到下次手动刷新）
         "buddy-ai-credits-sync" => Some("buddy-ai"),
@@ -407,6 +420,8 @@ fn effective_hhmm(st: &AppState, t: &SchedTask) -> String {
         "qoder-checkin" => Some(st.settings().qoder_checkin_hhmm),
         "officeace-checkin" => Some(st.settings().officeace_checkin_hhmm),
         "lobsterai-checkin" => Some(st.settings().lobsterai_checkin_hhmm),
+        "minimax-checkin" => Some(st.settings().minimax_checkin_hhmm),
+        "minimax-credits-sync" => Some(st.settings().minimax_credits_sync_hhmm),
         "buddy-ai-checkin" => Some(st.settings().buddy_ai_checkin_hhmm),
         "buddy-ai-renew" => Some(st.settings().buddy_ai_renew_hhmm),
         "buddy-ai-credits-sync" => Some(st.settings().buddy_ai_credits_sync_hhmm),
@@ -456,6 +471,8 @@ fn enabled(st: &AppState, key: &str) -> bool {
         // OfficeAce / LobsterAI：跟随全局设置开关（默认开）
         "officeace-checkin" => st.settings().officeace_checkin_enabled,
         "lobsterai-checkin" => st.settings().lobsterai_checkin_enabled,
+        // MiniMax 签到：跟随全局设置开关（默认开）；双区账号再按各自区开关过滤（任务内）
+        "minimax-checkin" => st.settings().minimax_checkin_enabled,
         // Buddy 国际版每日活跃打卡（阶段 3b）：独立开关（默认关，国际档显式开启制）
         "buddy-ai-checkin" => crate::commands::workbuddy::buddy_ai_checkin_enabled(st),
         // Buddy 国际版凭证兜底续期（2026-10-16，默认开，任务配置页可关）
@@ -787,6 +804,41 @@ fn run_task(
             }
             Ok(done)
         }
+        // MiniMax 每日签到（VENU-36）：多账号双区；空池奖励型豁免（skipped_empty_pool，
+        // 当日导入账号下一 tick 补打）；抢轮次锁与 UI 路径互斥；可重试失败返 Err 交
+        // 30 分钟冷却重试（needs_relogin 凭证失效类在 done.failed_permanent 口径内剔除，
+        // run_checkin_round 当前恒 0——单账号失败明细已按 fail_kind 落库可见）
+        "minimax-checkin" => {
+            // 奖励型签到空池豁免（对齐 doubao/buddy-ai 口径）：空池提前返回，
+            // tick 不 mark_run，当日导入账号下一 tick 补打
+            let pool = crate::store::docs::minimax_pool_load_checked(&crate::store::db(&st.data_dir))
+                .map_err(|e| format!("MiniMax 账号池读取失败：{e}"))?;
+            if pool.get("accounts").and_then(Value::as_array).map(|a| a.is_empty()).unwrap_or(true) {
+                return Ok(json!({ "ok": true, "skipped": "无 MiniMax 账号", "skipped_empty_pool": true }));
+            }
+            let Ok(_round) = super::minimax_checkin::try_acquire_round() else {
+                return Ok(json!({ "ok": true, "skipped": "已有 MiniMax 签到任务在执行中，本轮跳过", "skipped_busy": true }));
+            };
+            let done = super::minimax_checkin::run_checkin_round(st, None, &[], &mut |_| {});
+            let failed = done.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            // 审查 P2 同款：永久性凭证失败（needs_relogin/gone）重试注定失败，
+            // 从重试判定剔除——失效账号不拖动整轮全天冷却重试
+            let failed_permanent = done
+                .get("failed_permanent")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            if failed - failed_permanent > 0 {
+                let ok = done.get("ok").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let already = done.get("already").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let retryable = failed - failed_permanent;
+                return Err(format!("MiniMax 签到：{ok} 成功 / {already} 已领 / {retryable} 失败（稍后自动重试）"));
+            }
+            Ok(done)
+        }
+        // MiniMax 积分数据同步（VENU-36）：多账号双区取数 → 池三键回写 + 当日快照；
+        // 空池空转（普通 skipped 语义：mark_run 关闭当日重复触发，积分非奖励型漏跑可手动补）；
+        // 全部失败返 Err 交冷却重试
+        "minimax-credits-sync" => super::minimax_credits::run_sync_task(st),
         // F-80 Qoder 每日签到：与 `--task-run qoder-checkin` 同款；抢轮次锁与 UI 路径互斥
         "qoder-checkin" => {
             // 奖励型签到空池豁免（审查修复，对齐 doubao/buddy-ai 口径）：空池提前

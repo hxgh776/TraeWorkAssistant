@@ -335,6 +335,23 @@ impl AppState {
             s.lobsterai_checkin_enabled = true;
             s.lobsterai_checkin_hhmm = "09:50".into();
         }
+        // MiniMax Code（双区自动签到，VENU-36）：时刻为空视为从未配置，回填默认开 + 00:05
+        //（旧 3.9.3 基准）；双区开关同块复活（kv 完全缺失走 Settings::default() 时
+        // bool=false 会漏开——教训对照 jwt_renew_hhmm 注释；用户显式关闭某区后
+        // hhmm 保持非空，不会被此处重新打开）
+        if s.minimax_checkin_hhmm.trim().is_empty() {
+            s.minimax_checkin_enabled = true;
+            s.minimax_checkin_hhmm = "00:05".into();
+            s.minimax_cn_enabled = true;
+            s.minimax_global_enabled = true;
+        }
+        if s.minimax_credits_sync_hhmm.trim().is_empty() {
+            s.minimax_credits_sync_hhmm = "23:35".into();
+        }
+        // MiniMax 积分同步模式零值归一：空 = 从未配置 → every_hours（默认每 2 小时，VENU-6 调度口径）
+        if s.minimax_credits_sync_mode.trim().is_empty() {
+            s.minimax_credits_sync_mode = "every_hours".into();
+        }
         // Qoder 会话流水定时合并（qoder-sessions-compact）：同款零值回填
         //（kv 完全缺失走派生 Default bool=false 会漏开；时刻为空视为从未配置，回填默认开）
         if s.qoder_sessions_compact_hhmm.trim().is_empty() {
@@ -383,6 +400,7 @@ impl AppState {
             &mut s.qoder_credits_sync_hours,
             &mut s.buddy_ai_credits_sync_hours,
             &mut s.doubao_sync_hours,
+            &mut s.minimax_credits_sync_hours,
         ] {
             let v = field.trim().parse::<i64>().map(|h| h.clamp(1, 24)).unwrap_or(2);
             *field = v.to_string();
@@ -407,7 +425,7 @@ impl AppState {
         {
             let pinned = s.pinned_app.clone();
             s.hidden_apps.retain(|k| {
-                matches!(k.as_str(), "trae" | "buddy" | "qoder" | "doubao" | "officeace" | "lobsterai") && k != &pinned
+                matches!(k.as_str(), "trae" | "buddy" | "qoder" | "doubao" | "officeace" | "lobsterai" | "minimax") && k != &pinned
             });
             s.hidden_apps.sort_unstable();
             s.hidden_apps.dedup();

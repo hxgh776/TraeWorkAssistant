@@ -48,6 +48,11 @@ import LobsterAiOverview from './pages/lobsterai/LobsterAiOverview';
 import LobsterAiAccounts from './pages/lobsterai/LobsterAiAccounts';
 import LobsterAiCredits from './pages/lobsterai/LobsterAiCredits';
 import LobsterAiSettings from './pages/lobsterai/LobsterAiSettings';
+import MiniMaxOverview from './pages/minimax/MiniMaxOverview';
+import MiniMaxAccounts from './pages/minimax/MiniMaxAccounts';
+import MiniMaxCheckin from './pages/minimax/MiniMaxCheckin';
+import MiniMaxCredits from './pages/minimax/MiniMaxCredits';
+import MiniMaxSettings from './pages/minimax/MiniMaxSettings';
 
 function renderView(view: string) {
   switch (view) {
@@ -133,6 +138,16 @@ function renderView(view: string) {
       return <LobsterAiCredits />;
     case 'lobsterai-settings':
       return <LobsterAiSettings />;
+    case 'minimax-overview':
+      return <MiniMaxOverview />;
+    case 'minimax-accounts':
+      return <MiniMaxAccounts />;
+    case 'minimax-checkin':
+      return <MiniMaxCheckin />;
+    case 'minimax-credits':
+      return <MiniMaxCredits />;
+    case 'minimax-settings':
+      return <MiniMaxSettings />;
     default:
       return <Dashboard />;
   }

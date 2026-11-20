@@ -9,7 +9,7 @@
 
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 5;
+pub const SCHEMA_VERSION: i32 = 6;
 
 /// 行文档表白名单（rows_* 原语允许操作的表，防表名拼接注入）
 pub const ROW_TABLES: &[&str] = &[
@@ -33,6 +33,10 @@ pub const ROW_TABLES: &[&str] = &[
     "qoder_credits_history",
     "officeace_checkin_results",
     "lobsterai_checkin_results",
+    "minimax_accounts",
+    "minimax_tokens",
+    "minimax_checkin_results",
+    "minimax_credits_history",
 ];
 
 const DDL: &[&str] = &[
@@ -322,6 +326,30 @@ const DDL: &[&str] = &[
     )",
     // LobsterAI（网易有道龙虾）每日签到结果：本机登录态单账号，90 天滚动
     "CREATE TABLE IF NOT EXISTS lobsterai_checkin_results (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    // MiniMax Code 双区（minimax / minimax-global）账号池与凭证表（VENU-36 重建）：
+    // 账号池行文档（不含凭证）+ 凭证行文档（access/refresh token，仅本应用数据目录内）
+    "CREATE TABLE IF NOT EXISTS minimax_accounts (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    "CREATE TABLE IF NOT EXISTS minimax_tokens (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    // MiniMax 每日签到结果（多账号双区），90 天滚动
+    "CREATE TABLE IF NOT EXISTS minimax_checkin_results (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    // MiniMax 每日积分快照（pk = date 同日覆盖，365 天裁剪；看板余额趋势数据源）
+    "CREATE TABLE IF NOT EXISTS minimax_credits_history (
         pk         TEXT PRIMARY KEY,
         data       TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))

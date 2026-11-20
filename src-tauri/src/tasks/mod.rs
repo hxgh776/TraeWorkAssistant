@@ -33,6 +33,9 @@ pub mod trae_checkin;
 pub mod ui_click;
 pub mod buddy_ai_checkin;
 pub mod lobsterai_checkin;
+pub mod minimax_checkin;
+pub mod minimax_common;
+pub mod minimax_credits;
 pub mod officeace_checkin;
 pub mod wb_checkin;
 pub mod wb_common;
@@ -255,6 +258,40 @@ pub fn run_cli_task(name: &str, state: &AppState) -> i32 {
                 "skipped_busy": true
             })),
         },
+        // MiniMax Code 每日签到（双区多账号；CLI 与 GUI 跨进程互斥；VENU-36 重建，
+        // 任务名对齐旧 3.9.3 `minimax-checkin`）
+        "minimax-checkin" => match crate::tasks::qoder_common::CrossProcLock::try_acquire_ns(
+            &state.data_dir,
+            "minimax",
+            "round",
+            0,
+        ) {
+            (Some(_round), _) => {
+                let done = minimax_checkin::run_checkin_round(state, None, &[], &mut print_progress);
+                let failed = done.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                // 永久性凭证失败剔除（与调度器口径一致）
+                let failed_permanent = done
+                    .get("failed_permanent")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                if failed - failed_permanent > 0 {
+                    let ok = done.get("ok").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                    let already = done.get("already").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                    let retryable = failed - failed_permanent;
+                    Err(format!("MiniMax 签到：{ok} 成功 / {already} 已领 / {retryable} 失败"))
+                } else {
+                    Ok(done)
+                }
+            }
+            (None, reason) => Ok(serde_json::json!({
+                "ok": true,
+                "skipped": format!("另一进程正在执行 MiniMax 签到，本轮跳过（{}）", reason.map(|r| r.describe()).unwrap_or_default()),
+                "skipped_busy": true
+            })),
+        },
+        // MiniMax 积分数据同步（双区多账号，调度器/CLI 共用；空池空转；
+        // 全部失败返 Err 交调度器冷却重试；任务名对齐旧 3.9.3 `minimax-credits-sync`）
+        "minimax-credits-sync" => minimax_credits::run_sync_task(state),
         // Buddy 国际版积分数据同步 / 凭证兜底续期 / 模型目录同步（调度器/CLI 共用；
         // runtime=None：CLI 独立进程无网关运行态，仅落库不做运行池拨新）
         "buddy-ai-credits-sync" => crate::commands::workbuddy::buddy_ai_credits_sync_impl(state, None)

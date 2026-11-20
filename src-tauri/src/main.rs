@@ -617,6 +617,18 @@ fn main() {
             commands::lobsterai::lobsterai_quota,
             commands::lobsterai::lobsterai_checkin_start,
             commands::lobsterai::lobsterai_checkin_results,
+            commands::minimax::minimax_accounts_list,
+            commands::minimax::minimax_account_save,
+            commands::minimax::minimax_account_remove,
+            commands::minimax::minimax_device_start,
+            commands::minimax::minimax_device_poll,
+            commands::minimax::minimax_device_cancel,
+            commands::minimax::minimax_authjson_scan,
+            commands::minimax::minimax_authjson_import,
+            commands::minimax::minimax_checkin_start,
+            commands::minimax::minimax_checkin_results,
+            commands::minimax::minimax_credits_fetch,
+            commands::minimax::minimax_credits_history,
             tasks::scheduler::scheduler_status,
         ])
         .setup(|app| {
@@ -948,6 +960,14 @@ fn main() {
                 let st = app.state::<AppState>();
                 commands::officeace::startup_auto_checkin(&app2, &st);
                 commands::lobsterai::startup_auto_checkin(&app2, &st);
+            }
+
+            // MiniMax Code 启动自动补签（VENU-36）：多账号双区，独立开关（默认开），
+            // 抢不到跨进程轮次锁幂等跳过
+            {
+                let app2 = app.handle().clone();
+                let st = app.state::<AppState>();
+                commands::minimax::startup_auto_checkin(&app2, &st);
             }
 
             // CodeBuddy CLI 五重防护自动轮换（F-59）：独立后台线程按检查间隔执行，

@@ -5,7 +5,7 @@
 
 ## 1. 一句话
 
-Windows 桌面端多账号签到 + 登录态切换 + 设备隔离 + API 网关一站式工作台，**深度支持 Trae（Trae CN 单客户端，原 Trae Work / Trae CN IDE 双应用已官方合并）/ WorkBuddy / Qoder 三应用 + 豆包**（账号自动发现、切换/快照按目标应用独立、账号池 app 无关同池调度；Qoder 支持 PAT / OAuth 设备流 / IDE 登录态扫描三通道入池与每日双活动签到）。API 网关为 **trae / buddy / qoder / custom / buddy-ai 多池统一调度**（custom 为自定义上游组：组内负载均衡 + 熔断；默认候选序尾部兜底），每池独立开关。**所有数据仅存在 `%APPDATA%\AIWorkAssistant\`，零外部网络**。
+Windows 桌面端多账号签到 + 登录态切换 + 设备隔离 + API 网关一站式工作台，**深度支持 Trae（Trae CN 单客户端，原 Trae Work / Trae CN IDE 双应用已官方合并）/ WorkBuddy / Qoder 三应用 + 豆包**（账号自动发现、切换/快照按目标应用独立、账号池 app 无关同池调度；Qoder 支持 PAT / OAuth 设备流 / IDE 登录态扫描三通道入池与每日双活动签到）；另接入 **OfficeAce（华为果办）/ LobsterAI（有道龙虾）/ MiniMax Code（双区 minimax / minimimax-global，VENU-36 重建）** 签到域（复用/独立凭证通道每日签到领积分，MiniMax 含积分看板与 00:05 调度）。API 网关为 **trae / buddy / qoder / custom / buddy-ai 多池统一调度**（custom 为自定义上游组：组内负载均衡 + 熔断；默认候选序尾部兜底），每池独立开关。**所有数据仅存在 `%APPDATA%\AIWorkAssistant\`，零外部网络**。
 
 ## 2. Quick Start
 
@@ -75,10 +75,13 @@ ai-work-assistant/
 │       │   ├── auth.rs           # API Key 鉴权（Bearer + x-api-key 双风格）
 │       │   ├── models_sync.rs    # 模型列表配置化（api_models.json）+ 官网 batch_get_detail_param 同步
 │       │   └── api_logger.rs     # API 请求日志
-│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）
+│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）；minimax/ 为目录模块（common/accounts/oauth/checkin/credits——设备码流、auth.json 导入、双区签到与积分）
 │       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / doubao_session / doubao_quota / doubao_chats / ui_click）
 │           ├── trae_checkin.rs   # 批量签到（vault 解密内存传递，无子进程）
 │           ├── wb_checkin.rs     # WorkBuddy 签到/成长/续期（run_checkin_round / run_growth_round / run_renew_only）
+│           ├── minimax_common.rs # MiniMax Code 双区共享层（region 域名分派 / yy+x-signature 签名 / 设备码流 / auth.json 只读导入 / refresh 轮换三防线）
+│           ├── minimax_checkin.rs # MiniMax 每日签到（status→claim，claim_result 1/2 双分支幂等；多账号双区）
+│           ├── minimax_credits.rs # MiniMax 积分（get_membership_info free/purchased 拆分 + 快照落库）
 │           └── doubao_*.rs       # 豆包会话续期 / 额度巡检 / 对话导出
 │       └── switcher/            # 登录态切换器（原 PS 桥 trae-switch-bridge.ps1 全量 Rust 化）
 │           ├── mod.rs           # run_action 入口 + 7 Action 编排 + ProgressSink（TauriSink/CliSink）
@@ -209,6 +212,14 @@ ai-work-assistant/
 | Qoder | `qoder_groups_list / create / update / remove` | 分组管理（kv("qoder_groups")，结构与 Trae/Buddy 一致；create 重名校验；删除时组内账号回落未分组） |
 | Qoder | `qoder_accounts_export(includeCredentials?) / _import(payload)` | 账号库导入导出（kind 标记 `aiwork-qoder-pool`；凭证是否随行由用户勾选，含凭证导出前端强确认；分组定义随载荷导出，导入按 id 幂等合并 + 幽灵 group_id 回落未分组） |
 | Qoder | `qoder_env_reset_items()` / `qoder_env_reset(items)` | Qoder 环境残留清理清单 + 程序化清理（执行前关闭 Qoder IDE 与 Work 客户端——本体进程同名 "Qoder CN.exe" 一并覆盖；9 项含 QoderWork 客户端 `%APPDATA%\com.qodercn.app.stable` 的 Local State + Network\Cookies；单项失败不中断） |
+| MiniMax | `minimax_accounts_list / _account_save(id,name?,note?) / _account_remove(id)` | MiniMax Code 双区账号池（minimax_accounts/minimax_tokens 双表，凭证分离存储永不随视图下发）：列表（脱敏视图含 token 过期时间与积分缓存）/ 改名备注（脏检查）/ 移除（联动清凭证；孤儿凭证可再清） |
+| MiniMax | `minimax_device_start(region) / _device_poll / _device_cancel` | OAuth 设备码授权（RFC 8628 + S256 PKCE，client `mcode-public`，scope `agent.default`，audience `agent-backend`）：start 起会话返回 user_code 与 verification_uri_complete（浏览器授权）；poll 单步轮询（pending/slow_down 继续，终态 failed 终止），成功即 profile 建档入池 + 凭证落库（独立刷新链，不影响本机 MiniMax Code 客户端）；无 PAT 通道 |
+| MiniMax | `minimax_authjson_scan / _authjson_import(region?)` | 本机登录态只读扫描/导入（`~/.minimax/auth/prod/{cn\|en}/mcode-public/auth.json`，取含 accessToken 的 record 按新者优先；**绝不写回该文件**——authjson 通道不主动刷新，避免一次性轮换作废客户端链；过期凭证不入池） |
+| MiniMax | `minimax_checkin_start(region?, userIds?) → NDJSON minimax-checkin-progress` | Rust 直调 `tasks/minimax_checkin.rs::run_checkin_round`（`GET /minimax-cloud/api/v1/signin/status?timezone_offset=28800&is_desktop=1&client=desktop` → status==3 已领 / `POST .../claim`，`claim_result` 1=新签 2=重复幂等不算错误；`base_resp.status_code != 0` 业务错误如实落库；401 → 互斥刷新一次重试 → invalid_grant 熔断 needs_relogin；多账号间隔 minimax_checkin_gap_secs 默认 3s；signin/* 与 commerce/* 必签 yy + x-signature，`user/profile` 纯 Bearer） |
+| MiniMax | `minimax_checkin_results(days?)` | 签到日志（minimax_checkin_results 表 90 天滚动，pk=date\|user_id\|time_ms） |
+| MiniMax | `minimax_credits_fetch()` | 全账号实时积分（`POST /matrix/api/v1/commerce/get_membership_info` 签名请求）：`op_credit_summary.free_remaining_amount`（签到所得）/ `purchased_remaining_amount` 拆分，缺 op_credit_summary 报错不用 0 冒充；成功回写池三键（credits_free/purchased/total + credits_fetched_at）+ 当日快照覆盖落库 |
+| MiniMax | `minimax_credits_history(days?)` | 积分每日快照读取（minimax_credits_history 表 365 天，pk=date 同日覆盖） |
+| MiniMax | 调度：`minimax-checkin`（默认 00:05，settings.minimax_checkin_enabled/hhmm 可改）+ `minimax-credits-sync`（credits 四模式，默认 every_hours 每 2h，daily 23:35） | 应用内调度器任务（CLI `--task-run minimax-checkin / minimax-credits-sync` 同款实现；跨进程轮次锁 "minimax"/"round"；空池奖励型豁免 skipped_empty_pool，needs_relogin 失败剔除重试判定）；区开关 minimax_cn_enabled / minimax_global_enabled 过滤双区账号 |
 
 ### 5.1 Trae 账号发现与双 uid 体系（F-08，trae_apps.rs；双应用合并适配 2026-10-14）
 
@@ -270,6 +281,7 @@ ai-work-assistant/
 | `qoder-checkin-progress` | `{"type":"start",total}` / `{"type":"account",index,user_id,name,status,message,reward?,campaigns?}` / `{"type":"done",ok,already,failed,failed_empty_campaigns,skipped_busy?}`（Qoder 签到管线，与 wb-checkin-progress 前端组件同构；`failed_empty_campaigns` 为活动未开始/不可用类失败计数，启动补签推送按 `failed - failed_empty_campaigns` 判定；`campaigns` 为 F-80-余 v2 逐活动明细 `[{id,name,kind,reward?}]`，档期日历数据源；`skipped_busy=true` 表示跨进程锁占用本轮跳过——调度稍后自动重试，前端专项提示**不计入**成功/失败统计；**疑点⑦ store 化**：监听与归约在前端 store 层 setupListeners/`applyQoderCheckinLine`（qoderCheckin.running/lines/done/doneRev），页面切走/卸载不丢事件，QoderCheckin 页按 doneRev 联动刷新） |
 | `qoder-oauth-progress` | `{stage:'init'\|'browser'\|'polling'\|'success'\|'error', message, auth_url?}`（Qoder 设备流登录进度；auth_url 仅 browser 阶段携带） |
 | `qoder-oauth-done` | `{ok, id?, nickname?, message}`（设备流结果；成功已入池，凭证不出 Rust） |
+| `minimax-checkin-progress` | `{"type":"start",total}` / `{"type":"account",index,user_id,name,region,status,message,reward?,fail_kind?}` / `{"type":"done",ok,already,failed,failed_permanent}` / `{"type":"exit",ok}`（MiniMax 签到管线，officeace/qoder 同构；`region` 为 minimax\|minimax-global；`fail_kind=needs_relogin/gone` 计入 failed_permanent 供调度器剔除重试；凭证/授权失败文案不含 token） |
 
 ## 7. 数据文件
 

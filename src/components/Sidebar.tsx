@@ -95,9 +95,20 @@ const LOBSTERAI_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
   { key: 'lobsterai-settings', label: '环境配置', icon: Settings },
 ];
 
+/** MiniMax Code 应用菜单（VENU-36 重建；双区多账号：设备码授权 / auth.json 导入；
+ *  五页，无资源调度——旧 3.9.3 无 MiniMax 网关池） */
+const MINIMAX_NAV: { key: ViewKey; label: string; icon: typeof Users }[] = [
+  { key: 'minimax-overview', label: '概述', icon: LayoutDashboard },
+  { key: 'minimax-accounts', label: '账号管理', icon: Users },
+  { key: 'minimax-checkin', label: '每日签到', icon: CalendarCheck },
+  { key: 'minimax-credits', label: '积分看板', icon: Coins },
+  { key: 'minimax-settings', label: '环境配置', icon: Settings },
+];
+
 /** 应用切换 Tab：trae = 当前菜单；buddy = 批次1接入；qoder = F-80 接入；doubao = 接入中；
  *  buddy-ai = 国际版独立池（默认隐藏，系统设置-应用显示 opt-in）；
- *  officeace / lobsterai = 本机登录态自动签到（五页） */
+ *  officeace / lobsterai = 本机登录态自动签到（五页）；
+ *  minimax = MiniMax Code 双区自动签到（VENU-36 重建，五页） */
 export const APP_TABS: { key: AppKey; label: string; icon: typeof Users; disabled?: boolean; title?: string }[] = [
   { key: 'trae', label: 'Trae', icon: Sparkles },
   { key: 'buddy', label: 'Buddy', icon: Bot, title: 'WorkBuddy / CodeBuddy' },
@@ -106,6 +117,7 @@ export const APP_TABS: { key: AppKey; label: string; icon: typeof Users; disable
   { key: 'buddy-ai', label: 'BuddyAI', icon: Globe, title: 'Buddy 国际版（buddy-ai 独立池）' },
   { key: 'officeace', label: 'OfficeAce', icon: CalendarCheck, title: '华为 OfficeAce（果办）每日签到' },
   { key: 'lobsterai', label: 'LobsterAI', icon: PlayCircle, title: 'LobsterAI（网易有道龙虾）每日签到' },
+  { key: 'minimax', label: 'MiniMax', icon: Globe, title: 'MiniMax Code（双区：国内 minimax.cn / 国际 minimax.io）' },
 ];
 
 /** 全部合法应用 key（settings 脏值兜底用） */
@@ -147,7 +159,8 @@ export default function Sidebar({
   }, [activeApp, pinnedApp, settings?.hidden_apps, settings?.buddy_ai_visible]);
 
   // 按当前应用切换菜单：Trae → 现有 6 页；豆包 → 5 页；Buddy → 6 页；Qoder → 6 页（F-80）；
-  // BuddyAI → 6 页；OfficeAce / LobsterAI → 5 页（概述/账号管理/每日签到/积分看板/环境配置）
+  // BuddyAI → 6 页；OfficeAce / LobsterAI → 5 页（概述/账号管理/每日签到/积分看板/环境配置）；
+  // MiniMax → 5 页（VENU-36 重建）
   const nav =
     activeApp === 'doubao'
       ? DOUBAO_NAV
@@ -161,6 +174,8 @@ export default function Sidebar({
       ? OFFICEACE_NAV
       : activeApp === 'lobsterai'
       ? LOBSTERAI_NAV
+      : activeApp === 'minimax'
+      ? MINIMAX_NAV
       : NAV;
 
   // 主题轮询：每次点击切换到下一个主题并持久化

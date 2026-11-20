@@ -6,6 +6,18 @@
 
 ---
 
+## [Unreleased] · 2026-11-20 · MiniMax Code 应用重建（双区签到 / 积分看板 / 调度，VENU-36）
+
+### 新功能
+
+- **MiniMax Code 应用回归**：侧边栏新增 MiniMax 应用 Tab 与五页子导航（概述 / 账号管理 / 每日签到 / 积分看板 / 环境配置）。该应用曾存在于 3.9.3 交付分支（未合入 main，构建 3.9.4 后消失），本次按旧 3.9.3 行为基准 + VENU-5 定稿接口规格在 `main` 重建。
+- **双区账号接入**：国内区（`minimax` / agent.minimax.cn）与国际区（`minimax-global` / agent.minimax.io）账号按区归属、签到与展示。凭证双通道：① OAuth 设备码授权（RFC 8628 + S256 PKCE，独立刷新链，不影响本机 MiniMax Code 客户端登录，可自动刷新）；② 本机 `~/.minimax/auth/prod/{cn|en}/mcode-public/auth.json` 只读导入（不写回该文件、不主动刷新，避免一次性轮换作废客户端登录链）。无 PAT 通道。
+- **每日签到**：`signin/status → claim` 双接口（`timezone_offset=28800` 与北京时间对齐），`claim_result=2` 重复签到幂等视为「已领取」不算失败；业务错误（`base_resp.status_code != 0`）与失败原因如实落库，绝不静默跳过。refreshToken 一次性轮换三防线齐备：刷新互斥、成功立即落库、失效链熔断（needs_relogin，重试注定失败的账号不参与全天重试）。
+- **积分看板**：`get_membership_info` 快照按免费/购买拆分展示余额与近 30 天获得（签到 reward 按日聚合）；积分数据同步任务（off/hourly/every_hours/daily 四模式，默认每 2 小时）落 365 天快照曲线；上游失败报错展示，不用 0 冒充余额。
+- **调度**：每日签到默认 **00:05** 首跑（跨零点即可领当日积分，可改），失败日内 30→60→120 分钟退避重试；启动补签与 CLI 任务（`--task-run minimax-checkin` / `minimax-credits-sync`）齐备；双区开关（`minimax_cn_enabled` / `minimax_global_enabled`）可独立停用某区。
+
+---
+
 ## [Unreleased] · 2026-11-16 · 新增 OfficeAce（果办）/ LobsterAI（有道龙虾）自动签到
 
 ### 新功能

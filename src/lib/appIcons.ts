@@ -134,4 +134,5 @@ export const DEFAULT_APP_ICONS: Record<AppKey, string> = {
   'buddy-ai': 'Globe',
   officeace: 'Gem',
   lobsterai: 'Fish',
+  minimax: 'Globe',
 };

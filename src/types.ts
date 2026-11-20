@@ -47,9 +47,16 @@ export type ViewKey =
   | 'lobsterai-accounts'
   | 'lobsterai-checkin'
   | 'lobsterai-credits'
-  | 'lobsterai-settings';
+  | 'lobsterai-settings'
+  // MiniMax Code（双区：minimax CN / minimax-global Global；VENU-36 按旧 3.9.3 基准重建；
+  // 五页子导航对齐其他应用；不补资源调度——旧版无 MiniMax 网关池）
+  | 'minimax-overview'
+  | 'minimax-accounts'
+  | 'minimax-checkin'
+  | 'minimax-credits'
+  | 'minimax-settings';
 
-/** 侧边栏应用切换（左下角 Tab）：Trae 当前菜单 / Buddy / Qoder（F-80）/ 豆包 / BuddyAI（buddy-ai 国际版） */
+/** 侧边栏应用切换（左下角 Tab）：Trae 当前菜单 / Buddy / Qoder（F-80）/ 豆包 / BuddyAI（buddy-ai 国际版）/ MiniMax */
 export type AppKey =
   | 'trae'
   | 'buddy'
@@ -57,7 +64,8 @@ export type AppKey =
   | 'doubao'
   | 'buddy-ai'
   | 'officeace'
-  | 'lobsterai';
+  | 'lobsterai'
+  | 'minimax';
 
 /** 各应用的默认落地页 */
 export const APP_HOME_VIEW: Record<AppKey, ViewKey> = {
@@ -68,6 +76,7 @@ export const APP_HOME_VIEW: Record<AppKey, ViewKey> = {
   'buddy-ai': 'buddyai-overview',
   officeace: 'officeace-overview',
   lobsterai: 'lobsterai-overview',
+  minimax: 'minimax-overview',
 };
 
 
@@ -456,6 +465,23 @@ export interface Settings {
   lobsterai_checkin_enabled: boolean;
   /** LobsterAI 每日签到触发时刻 HH:MM（默认 09:50） */
   lobsterai_checkin_hhmm: string;
+  // ── MiniMax Code（双区自动签到，VENU-36 重建）──
+  /** MiniMax 每日签到调度开关（默认开；双区账号各自签到） */
+  minimax_checkin_enabled: boolean;
+  /** MiniMax 每日签到触发时刻 HH:MM（默认 00:05，旧 3.9.3 行为基准） */
+  minimax_checkin_hhmm: string;
+  /** MiniMax 国内区（agent.minimax.cn）账号参与签到与积分同步（默认开） */
+  minimax_cn_enabled: boolean;
+  /** MiniMax 国际区（agent.minimax.io）账号参与签到与积分同步（默认开） */
+  minimax_global_enabled: boolean;
+  /** MiniMax 签到多账号间隔秒（默认 3，0 = 关闭；防上游频控） */
+  minimax_checkin_gap_secs: number | null;
+  /** MiniMax 积分数据同步模式：off | hourly | daily | every_hours（每N小时，默认） */
+  minimax_credits_sync_mode: string;
+  /** MiniMax 积分同步间隔小时数（every_hours 模式生效，默认 2，1..24） */
+  minimax_credits_sync_hours: string;
+  /** MiniMax 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:35） */
+  minimax_credits_sync_hhmm: string;
   /** Qoder 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:40） */
   qoder_credits_sync_hhmm: string;
   /** Qoder 积分数据同步旧开关（保留兼容；调度已改按 qoder_credits_sync_mode 判定） */
@@ -2166,4 +2192,139 @@ export interface LocalCheckinDone {
   ok: number;
   already: number;
   failed: number;
+}
+
+// ── MiniMax Code（双区自动签到；VENU-36 按旧 3.9.3 基准重建）──
+
+/** MiniMax 账号所属区：minimax = 国内（agent.minimax.cn）；minimax-global = 国际（agent.minimax.io） */
+export type MinimaxRegion = 'minimax' | 'minimax-global';
+
+/** MiniMax 账号视图（脱敏；凭证只在后端 token 表，永不下发） */
+export interface MinimaxAccountView {
+  id: string;
+  region: MinimaxRegion;
+  user_id: string;
+  name: string;
+  email: string;
+  note: string;
+  /** oauth_device = 设备码独立链（可自动刷新）；authjson = 本机登录态只读导入 */
+  credential_source: string;
+  added_at: string | null;
+  /** 凭证授权链是否已失效（重新授权后清除） */
+  needs_relogin: boolean;
+  relogin_reason: string;
+  /** access token 过期时刻（Unix 毫秒；0/缺省 = 未知） */
+  token_expires_at_ms?: number | null;
+  // 积分缓存（积分同步/实时刷新回写）
+  credits_free: number | null;
+  credits_purchased: number | null;
+  credits_total: number | null;
+  plan_name: string;
+  credits_fetched_at: string | null;
+  // 最近签到（签到轮回写）
+  last_checkin_status: string | null;
+  last_checkin_date: string | null;
+}
+
+/** MiniMax 设备码授权起点（minimax_device_start 返回） */
+export interface MinimaxDeviceStart {
+  region: MinimaxRegion;
+  user_code: string;
+  verification_uri_complete: string;
+  /** 设备码有效期（秒） */
+  expires_in: number;
+  /** 建议轮询间隔（秒） */
+  interval: number;
+}
+
+/** MiniMax 设备码轮询单步（minimax_device_poll 返回） */
+export interface MinimaxDevicePoll {
+  status: 'pending' | 'slow_down' | 'success' | 'failed';
+  message?: string;
+  account?: MinimaxAccountView;
+}
+
+/** 本机 auth.json 扫描记录（脱敏摘要） */
+export interface MinimaxAuthjsonRecord {
+  region: MinimaxRegion;
+  subject: string;
+  account_id: string;
+  expires_at_ms: number;
+  path: string;
+  expired: boolean;
+}
+
+/** auth.json 导入结果 */
+export interface MinimaxAuthjsonImport {
+  imported: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+/** MiniMax 签到结果行（minimax_checkin_results；90 天滚动） */
+export interface MinimaxCheckinRecord {
+  date: string;
+  time: string;
+  time_ms: number;
+  user_id: string;
+  name: string;
+  region: MinimaxRegion;
+  status: string;
+  message: string;
+  reward?: number | null;
+  /** needs_relogin = 凭证失效（重试注定失败，需重新授权） */
+  fail_kind?: string;
+}
+
+/** MiniMax 单账号积分信息（minimax_credits_fetch 行；失败行带 error） */
+export interface MinimaxCreditsInfo {
+  account_id: string;
+  user_id: string;
+  name: string;
+  region: MinimaxRegion;
+  plan_name: string;
+  /** 免费/活动积分余额（签到所得在此） */
+  free: number;
+  /** 购买积分余额 */
+  purchased: number;
+  total: number;
+  /** 套餐到期（毫秒；0 = 无到期/免费版） */
+  expires_at_ms: number;
+  fetched_at: string;
+  error?: string;
+}
+
+/** MiniMax 每日积分快照（minimax_credits_history 行；pk=date 同日覆盖，365 天滚动） */
+export interface MinimaxCreditsSnapshot {
+  date: string;
+  ts: number;
+  accounts: {
+    id: string;
+    user_id: string;
+    name: string;
+    region: MinimaxRegion;
+    free: number;
+    purchased: number;
+    total: number;
+    plan_name: string;
+  }[];
+  failed?: number;
+}
+
+/** 签到进度事件（minimax-checkin-progress NDJSON 行；对齐 LocalCheckinLine + 区维度） */
+export interface MinimaxCheckinLine {
+  type?: string;
+  index?: number;
+  user_id?: string;
+  name?: string;
+  region?: MinimaxRegion;
+  status?: string;
+  message?: string;
+  reward?: number;
+  ok?: number;
+  already?: number;
+  failed?: number;
+  total?: number;
+  error?: string;
 }

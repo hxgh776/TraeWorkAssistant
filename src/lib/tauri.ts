@@ -6,6 +6,15 @@ import type {
   OfficeAceQuota,
   LobsterAiStatus,
   LobsterAiQuota,
+  MinimaxRegion,
+  MinimaxAccountView,
+  MinimaxDeviceStart,
+  MinimaxDevicePoll,
+  MinimaxAuthjsonRecord,
+  MinimaxAuthjsonImport,
+  MinimaxCheckinRecord,
+  MinimaxCreditsInfo,
+  MinimaxCreditsSnapshot,
   AccountView,
   ApiServiceStatus,
   BuddyAiAccountView,
@@ -197,6 +206,27 @@ export const api = {
       invoke<LocalCheckinRecord[]>('lobsterai_checkin_results', { days }),
     // 只读积分 / 连签数据（client-activities context）；同上，失败如实报错
     quota: () => invoke<LobsterAiQuota>('lobsterai_quota'),
+  },
+  // ---- MiniMax Code（双区自动签到；VENU-36 按旧 3.9.3 基准重建）----
+  minimax: {
+    accountsList: () => invoke<MinimaxAccountView[]>('minimax_accounts_list'),
+    accountSave: (id: string, name?: string, note?: string) =>
+      invoke<void>('minimax_account_save', { id, name, note }),
+    accountRemove: (id: string) => invoke<void>('minimax_account_remove', { id }),
+    // OAuth 设备码流（RFC 8628 + S256 PKCE）：start 起会话 → 浏览器授权 → poll 单步轮询
+    deviceStart: (region: MinimaxRegion) => invoke<MinimaxDeviceStart>('minimax_device_start', { region }),
+    devicePoll: () => invoke<MinimaxDevicePoll>('minimax_device_poll'),
+    deviceCancel: () => invoke<void>('minimax_device_cancel'),
+    // 本机登录态（auth.json）只读扫描 / 导入；绝不写回该文件
+    authjsonScan: () => invoke<{ records: MinimaxAuthjsonRecord[]; count: number }>('minimax_authjson_scan'),
+    authjsonImport: (region?: MinimaxRegion) => invoke<MinimaxAuthjsonImport>('minimax_authjson_import', { region }),
+    // 签到（可选 region / user_ids 收窄；进度走 minimax-checkin-progress NDJSON 事件）
+    checkinStart: (region?: MinimaxRegion, userIds?: string[]) =>
+      invoke<void>('minimax_checkin_start', { region, userIds }),
+    checkinResults: (days = 30) => invoke<MinimaxCheckinRecord[]>('minimax_checkin_results', { days }),
+    // 全账号积分实时查询（回写池 + 当日快照）；失败行内带 error，全部失败时 reject
+    creditsFetch: () => invoke<MinimaxCreditsInfo[]>('minimax_credits_fetch'),
+    creditsHistory: (days = 30) => invoke<MinimaxCreditsSnapshot[]>('minimax_credits_history', { days }),
   },
   env: {
     // TraeWork 合并后唯一客户端检测（原 env_check 已删，统一走 Trae CN 通道）

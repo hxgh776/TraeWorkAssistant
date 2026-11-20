@@ -2545,6 +2545,104 @@ pub fn lobsterai_checkin_results_upsert(s: &Store, rec: &Value) -> Result<(), St
     checkin_results_upsert_into(s, "lobsterai_checkin_results", rec)
 }
 
+// ── MiniMax Code 账号池 / 凭证 / 签到结果 / 积分快照（VENU-36 重建，形态对齐 qoder_*）──
+
+/// 读整池（结构 {accounts: [...]}；账号对象原样保真，不含凭证——凭证在 minimax_tokens）
+pub fn minimax_pool_load(s: &Store) -> Value {
+    let accounts: Vec<Value> = s
+        .rows_all("minimax_accounts")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, data)| data)
+        .collect();
+    json!({ "accounts": accounts })
+}
+
+/// 可失败口径读整池（审查 M-4 同款：读失败走 Err 重试链，不静默吞成空池）
+pub fn minimax_pool_load_checked(s: &Store) -> Result<Value, String> {
+    let accounts: Vec<Value> = s
+        .rows_all("minimax_accounts")?
+        .into_iter()
+        .map(|(_, data)| data)
+        .collect();
+    Ok(json!({ "accounts": accounts }))
+}
+
+/// 写整池（pk = 账号 id，缺 id 用序号占位）
+pub fn minimax_pool_save(s: &Store, pool: &Value) -> Result<(), String> {
+    let empty = Vec::new();
+    let arr = pool.get("accounts").and_then(Value::as_array).unwrap_or(&empty);
+    let rows: Vec<(String, Value)> = arr
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let id = a.get("id").and_then(Value::as_str).filter(|s| !s.is_empty());
+            (id.map(String::from).unwrap_or_else(|| format!("__idx{i}")), a.clone())
+        })
+        .collect();
+    s.rows_replace("minimax_accounts", &rows)
+}
+
+/// 读单条凭证记录（None = 无凭证；损坏行按 None 处理，不混入消费方）
+pub fn minimax_token_get(s: &Store, id: &str) -> Option<Value> {
+    s.rows_all("minimax_tokens")
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(pk, _)| pk == id)
+        .map(|(_, data)| data)
+        .filter(|v| v.is_object())
+}
+
+/// 写单条凭证记录（刷新成功立即落库的唯一入口；调用方必须无条件等待结果）
+pub fn minimax_token_put(s: &Store, id: &str, rec: &Value) -> Result<(), String> {
+    s.row_upsert("minimax_tokens", id, rec)
+}
+
+/// 删除单条凭证记录（移除账号时联动清理）
+pub fn minimax_token_del(s: &Store, id: &str) -> Result<(), String> {
+    s.row_delete("minimax_tokens", id)
+}
+
+pub fn minimax_checkin_results_upsert(s: &Store, rec: &Value) -> Result<(), String> {
+    checkin_results_upsert_into(s, "minimax_checkin_results", rec)
+}
+
+/// 读全部积分快照（按 pk 升序 = 日期升序）
+pub fn minimax_credits_history_load(s: &Store) -> Vec<Value> {
+    s.rows_all("minimax_credits_history")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, data)| data)
+        .collect()
+}
+
+/// 同日覆盖 upsert + 365 天裁剪（pk 即 date，YYYY-MM-DD 字符串比较即时间序）
+pub fn minimax_credits_history_upsert(s: &Store, snap: &Value) -> Result<(), String> {
+    let date = snap.get("date").and_then(Value::as_str).unwrap_or("").to_string();
+    if date.is_empty() {
+        return Err("快照缺少 date 字段".into());
+    }
+    s.row_upsert("minimax_credits_history", &date, snap)?;
+    let cutoff = (chrono::Local::now().date_naive() - chrono::Duration::days(365))
+        .format("%Y-%m-%d")
+        .to_string();
+    let stale: Vec<String> = s
+        .rows_all("minimax_credits_history")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(pk, _)| pk)
+        .filter(|pk| pk.as_str() < cutoff.as_str())
+        .collect();
+    for pk in stale {
+        if let Err(e) =
+            s.with_conn(|c| c.execute("DELETE FROM minimax_credits_history WHERE pk = ?1", [&pk]))
+        {
+            eprintln!("[minimax] 积分快照滚动裁剪删除失败（{pk}）：{e}，过期行留待下次裁剪");
+        }
+    }
+    Ok(())
+}
+
 /// 最近 `days` 天的签到结果（pk 前缀为日期，字符串比较即时间序）。
 pub fn checkin_results_since(s: &Store, table: &str, days: i64) -> Result<Vec<Value>, String> {
     ensure_result_table(table)?;

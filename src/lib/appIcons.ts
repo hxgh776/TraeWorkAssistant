@@ -135,4 +135,5 @@ export const DEFAULT_APP_ICONS: Record<AppKey, string> = {
   officeace: 'Gem',
   lobsterai: 'Fish',
   minimax: 'Globe',
+  codearts: 'Cloud',
 };

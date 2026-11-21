@@ -5,7 +5,7 @@
 
 ## 1. 一句话
 
-Windows 桌面端多账号签到 + 登录态切换 + 设备隔离 + API 网关一站式工作台，**深度支持 Trae（Trae CN 单客户端，原 Trae Work / Trae CN IDE 双应用已官方合并）/ WorkBuddy / Qoder 三应用 + 豆包**（账号自动发现、切换/快照按目标应用独立、账号池 app 无关同池调度；Qoder 支持 PAT / OAuth 设备流 / IDE 登录态扫描三通道入池与每日双活动签到）；另接入 **OfficeAce（华为果办）/ LobsterAI（有道龙虾）/ MiniMax Code（双区 minimax / minimimax-global，VENU-36 重建）** 签到域（复用/独立凭证通道每日签到领积分，MiniMax 含积分看板与 00:05 调度）。API 网关为 **trae / buddy / qoder / custom / buddy-ai 多池统一调度**（custom 为自定义上游组：组内负载均衡 + 熔断；默认候选序尾部兜底），每池独立开关。**所有数据仅存在 `%APPDATA%\AIWorkAssistant\`，零外部网络**。
+Windows 桌面端多账号签到 + 登录态切换 + 设备隔离 + API 网关一站式工作台，**深度支持 Trae（Trae CN 单客户端，原 Trae Work / Trae CN IDE 双应用已官方合并）/ WorkBuddy / Qoder 三应用 + 豆包**（账号自动发现、切换/快照按目标应用独立、账号池 app 无关同池调度；Qoder 支持 PAT / OAuth 设备流 / IDE 登录态扫描三通道入池与每日双活动签到）；另接入 **OfficeAce（华为果办）/ LobsterAI（有道龙虾）/ MiniMax Code（双区 minimax / minimax-global，VENU-36 重建）/ CodeArts（华为云码道，VENU-37 重建）** 签到域（复用/独立凭证通道每日签到领积分，MiniMax 含积分看板与 00:05 调度，CodeArts 含三通道 STS 凭证、积分看板与 00:20 签到 / 23:58 积分同步调度）。API 网关为 **trae / buddy / qoder / custom / buddy-ai 多池统一调度**（custom 为自定义上游组：组内负载均衡 + 熔断；默认候选序尾部兜底），每池独立开关。**所有数据仅存在 `%APPDATA%\AIWorkAssistant\`，零外部网络**。
 
 ## 2. Quick Start
 
@@ -75,13 +75,17 @@ ai-work-assistant/
 │       │   ├── auth.rs           # API Key 鉴权（Bearer + x-api-key 双风格）
 │       │   ├── models_sync.rs    # 模型列表配置化（api_models.json）+ 官网 batch_get_detail_param 同步
 │       │   └── api_logger.rs     # API 请求日志
-│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）；minimax/ 为目录模块（common/accounts/oauth/checkin/credits——设备码流、auth.json 导入、双区签到与积分）
+│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）；minimax/ 为目录模块（common/accounts/oauth/checkin/credits——设备码流、auth.json 导入、双区签到与积分）；codearts/ 为目录模块（common/accounts/credentials/checkin/credits——登录态/AK-SK/OAuth 三通道、签到与积分）
 │       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / doubao_session / doubao_quota / doubao_chats / ui_click）
 │           ├── trae_checkin.rs   # 批量签到（vault 解密内存传递，无子进程）
 │           ├── wb_checkin.rs     # WorkBuddy 签到/成长/续期（run_checkin_round / run_growth_round / run_renew_only）
 │           ├── minimax_common.rs # MiniMax Code 双区共享层（region 域名分派 / yy+x-signature 签名 / 设备码流 / auth.json 只读导入 / refresh 轮换三防线）
 │           ├── minimax_checkin.rs # MiniMax 每日签到（status→claim，claim_result 1/2 双分支幂等；多账号双区）
 │           ├── minimax_credits.rs # MiniMax 积分（get_membership_info free/purchased 拆分 + 快照落库）
+│           ├── codearts_common.rs # CodeArts 共享层（SDK-HMAC-SHA256 签名器金测 / STS 凭证与刷新熔断 / state.vscdb 只读导入 / caller-identity）
+│           ├── codearts_oauth.rs  # CodeArts 浏览器 OAuth 通道协议（PKCE + DPoP ES256 + 授权码/refresh 换票）
+│           ├── codearts_checkin.rs # CodeArts 每日签到（delivery→claim，只领 claimable+MANUAL_CLAIM；业务码 0/40001/4006/4004/4003 分类；多账号）
+│           ├── codearts_credits.rs # CodeArts 积分（statistics/plugin 归一 + 快照落库；usageTotalPackageCredit 缺失报因不冒充 0）
 │           └── doubao_*.rs       # 豆包会话续期 / 额度巡检 / 对话导出
 │       └── switcher/            # 登录态切换器（原 PS 桥 trae-switch-bridge.ps1 全量 Rust 化）
 │           ├── mod.rs           # run_action 入口 + 7 Action 编排 + ProgressSink（TauriSink/CliSink）
@@ -220,6 +224,15 @@ ai-work-assistant/
 | MiniMax | `minimax_credits_fetch()` | 全账号实时积分（`POST /matrix/api/v1/commerce/get_membership_info` 签名请求）：`op_credit_summary.free_remaining_amount`（签到所得）/ `purchased_remaining_amount` 拆分，缺 op_credit_summary 报错不用 0 冒充；成功回写池三键（credits_free/purchased/total + credits_fetched_at）+ 当日快照覆盖落库 |
 | MiniMax | `minimax_credits_history(days?)` | 积分每日快照读取（minimax_credits_history 表 365 天，pk=date 同日覆盖） |
 | MiniMax | 调度：`minimax-checkin`（默认 00:05，settings.minimax_checkin_enabled/hhmm 可改）+ `minimax-credits-sync`（credits 四模式，默认 every_hours 每 2h，daily 23:35） | 应用内调度器任务（CLI `--task-run minimax-checkin / minimax-credits-sync` 同款实现；跨进程轮次锁 "minimax"/"round"；空池奖励型豁免 skipped_empty_pool，needs_relogin 失败剔除重试判定）；区开关 minimax_cn_enabled / minimax_global_enabled 过滤双区账号 |
+| CodeArts | `codearts_accounts_list / _account_save(id,name?,note?) / _account_remove(id)` | CodeArts 账号池（codearts_accounts/codearts_tokens 双表，凭证分离存储永不随视图下发）：列表（脱敏视图含 STS 过期时间与积分缓存）/ 改名备注（脏检查）/ 移除（联动清凭证；孤儿凭证可再清） |
+| CodeArts | `codearts_local_scan() / codearts_local_import()` | 桌面端登录态只读扫描/导入（通道 A 主通道；`%APPDATA%\codearts-agent` 家族候选目录 → Local State DPAPI 主密钥 → state.vscdb secret:// 键 AES-256-GCM 解密 → STS 三元组；**绝不写回该库、不消费 refresh_token**——local_import 通道不主动刷新，过期时重读对齐客户端续期结果；过期会话拒绝入池并提示重登后重扫；身份命名 caller-identity 优先，失败降级会话内嵌 account.label / AK 前缀） |
+| CodeArts | `codearts_account_import_manual(accessKey, secretKey, securityToken?, expiresAtMs?)` | 手工 IAM AK/SK 导入（通道 C；旧 3.9.3 同名命令同参数；AK/SK 均不能为空，expiresAtMs 0 = 永久不过期） |
+| CodeArts | `codearts_oauth_start() / _poll() / _cancel() / _complete_url(url)` | 浏览器 OAuth（通道 B；授权码 + PKCE S256 + DPoP ES256，client `codearts-agent`，本机回环回调随机端口 ≥10000 + 5 分钟空闲收口；start 返回授权链接，poll 单步轮询，回调未自动返回时粘贴最终地址兜底；独立授权链可自动刷新，不影响桌面端登录。端到端需真人浏览器授权——协议有单测，属「未实测」项） |
+| CodeArts | `codearts_credential_status(id)` | 凭证就绪预检（不发网络）：usable / expires_at_ms / credential_source / refreshable |
+| CodeArts | `codearts_checkin_start(userIds?) → NDJSON codearts-checkin-progress` | Rust 直调 `tasks/codearts_checkin.rs::run_checkin_round`（`GET /v1/ops/delivery?channel=IDE` → 只领 `claimable && extra.triggerMode==MANUAL_CLAIM`（绝不伪造触发事件）→ `POST /v1/ops/claim {campaignId, idempotentKey:<uuid>, channel:"IDE"}`（ops 端点身份头额外 `Agent-Type: PromptCenter`）；业务码 0 成功 / 40001 今日已领 / 4006 名额用完（均幂等中性）/ 4004 过期 / 4003 禁用熔断；401 与 `APIG.0301/0303/0602` 归 needs_relogin；金额读 benefitAmount 禁止硬编码；无活动/无可领转中性 noop；多账号间隔 codearts_checkin_gap_secs 默认 3s。SDK-HMAC-SHA256 签名：CanonicalURI 强制尾斜杠 + SignedHeaders 前空行 + `Authorization: SDK-HMAC-SHA256 Access=<AK>` 形态（Credential= AWS 风格形态恒 0301，真机探针证明），全部请求头 + host 参与签名） |
+| CodeArts | `codearts_checkin_results(days?)` | 签到日志（codearts_checkin_results 表 90 天滚动，pk=date\|user_id\|time_ms） |
+| CodeArts | `codearts_credits_fetch()` / `codearts_credits_history(days?)` | 全账号实时积分（`GET /snap-manager/v1/statistics/plugin` 普通身份头无 Agent-Type；只读统计不消耗积分）：usageTotalPackageCredit 缺失 = 无积分套餐报因不用 0 冒充；余额/已用/即将到期/赠送（usageBonusPackageCredit）拆分 + package_name + end_date；成功回写池缓存键 + 当日快照覆盖落库（365 天滚动） |
+| CodeArts | 调度：`codearts-checkin`（默认 00:20，settings.codearts_checkin_enabled/hhmm 可改）+ `codearts-credits-sync`（credits 四模式，默认 **daily 23:58**——旧 3.9.3 基准：当日领取积分当日有效，23:58 快照捕捉当日末态） | 应用内调度器任务（CLI `--task-run codearts-checkin / codearts-credits-sync` 同款实现；跨进程轮次锁 "codearts"/"round"；空池奖励型豁免 skipped_empty_pool，needs_relogin 失败剔除重试判定；活动官方截止 2026-12-31 后转 noop 常态不报错刷屏） |
 
 ### 5.1 Trae 账号发现与双 uid 体系（F-08，trae_apps.rs；双应用合并适配 2026-10-14）
 

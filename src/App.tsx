@@ -53,6 +53,11 @@ import MiniMaxAccounts from './pages/minimax/MiniMaxAccounts';
 import MiniMaxCheckin from './pages/minimax/MiniMaxCheckin';
 import MiniMaxCredits from './pages/minimax/MiniMaxCredits';
 import MiniMaxSettings from './pages/minimax/MiniMaxSettings';
+import CodeArtsOverview from './pages/codearts/CodeArtsOverview';
+import CodeArtsAccounts from './pages/codearts/CodeArtsAccounts';
+import CodeArtsCheckin from './pages/codearts/CodeArtsCheckin';
+import CodeArtsCredits from './pages/codearts/CodeArtsCredits';
+import CodeArtsSettings from './pages/codearts/CodeArtsSettings';
 
 function renderView(view: string) {
   switch (view) {
@@ -148,6 +153,16 @@ function renderView(view: string) {
       return <MiniMaxCredits />;
     case 'minimax-settings':
       return <MiniMaxSettings />;
+    case 'codearts-overview':
+      return <CodeArtsOverview />;
+    case 'codearts-accounts':
+      return <CodeArtsAccounts />;
+    case 'codearts-checkin':
+      return <CodeArtsCheckin />;
+    case 'codearts-credits':
+      return <CodeArtsCredits />;
+    case 'codearts-settings':
+      return <CodeArtsSettings />;
     default:
       return <Dashboard />;
   }

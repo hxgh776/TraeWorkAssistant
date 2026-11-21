@@ -132,6 +132,15 @@ const TASKS: &[SchedTask] = &[
     // 看板同步四模式（off/hourly/every_hours/daily，settings.minimax_credits_sync_mode，
     // 默认 every_hours 每 2 小时，VENU-6 调度口径；daily 时刻默认 23:35 错峰）
     SchedTask { key: "minimax-credits-sync", name: "MiniMax 积分数据同步", hhmm: "23:35", kind: "credits" },
+    // CodeArts（华为云码道）每日签到（VENU-37 按旧 3.9.3 基准重建，任务名对齐旧
+    // 3.9.3 `codearts-checkin`）：默认 00:20（旧 3.9.3 基准 + 与 MiniMax 00:05 错峰
+    // ≥10 分钟；settings.codearts_checkin_hhmm 可改），失败日内退避重试；
+    // 多账号按各自 STS 凭证逐个签到，needs_relogin 失败剔除重试判定
+    SchedTask { key: "codearts-checkin", name: "CodeArts 每日签到", hhmm: "00:20", kind: "fix" },
+    // CodeArts 积分数据同步（任务名对齐旧 3.9.3 `codearts-credits-sync`）：对齐看板
+    // 同步四模式（settings.codearts_credits_sync_mode，默认 **daily 23:58**——
+    // 旧 3.9.3 行为基准：当日领取积分当日有效，23:58 快照捕捉当日余额末态）
+    SchedTask { key: "codearts-credits-sync", name: "CodeArts 积分数据同步", hhmm: "23:58", kind: "credits" },
     // Buddy 国际版模型目录同步（2026-10-16）：/v3/config 直连拉取（动态目录替换，
     // 与 API 服务启动挂点互补）；开关/时刻独立（默认开，05:55 错峰）
     SchedTask { key: "buddy-ai-catalog-sync", name: "Buddy 国际版模型目录同步", hhmm: "05:55", kind: "models" },
@@ -190,6 +199,7 @@ fn credits_sync_mode(st: &AppState, key: &str) -> String {
         "buddy-ai-credits-sync" => s.buddy_ai_credits_sync_mode.as_str(),
         "doubao-sync" => s.doubao_sync_mode.as_str(),
         "minimax-credits-sync" => s.minimax_credits_sync_mode.as_str(),
+        "codearts-credits-sync" => s.codearts_credits_sync_mode.as_str(),
         _ => s.trae_credits_sync_mode.as_str(),
     };
     match raw.trim() {
@@ -207,6 +217,7 @@ fn credits_sync_hours(st: &AppState, key: &str) -> i64 {
         "buddy-ai-credits-sync" => s.buddy_ai_credits_sync_hours.as_str(),
         "doubao-sync" => s.doubao_sync_hours.as_str(),
         "minimax-credits-sync" => s.minimax_credits_sync_hours.as_str(),
+        "codearts-credits-sync" => s.codearts_credits_sync_hours.as_str(),
         _ => s.trae_credits_sync_hours.as_str(),
     };
     raw.trim().parse::<i64>().unwrap_or(2).clamp(1, 24)
@@ -259,6 +270,9 @@ fn board_platform(key: &str) -> Option<&'static str> {
         // T3 审查修复同款：MiniMax 积分同步任务写入 minimax_credits_history 与池三键后，
         // 常驻积分页需静默重读（此前缺映射致看板数据滞后到下次手动刷新）
         "minimax-credits-sync" => Some("minimax"),
+        // CodeArts 积分同步同款：任务写入 codearts_credits_history 与池缓存键后，
+        // 常驻积分页静默重读（VENU-37）
+        "codearts-credits-sync" => Some("codearts"),
         // T3 审查修复：buddy-ai 积分同步任务写入 buddy_ai_credits_cache 与池快照
         // 后，BuddyAi 看板同款联动（此前缺映射致看板数据滞后到下次手动刷新）
         "buddy-ai-credits-sync" => Some("buddy-ai"),
@@ -422,6 +436,8 @@ fn effective_hhmm(st: &AppState, t: &SchedTask) -> String {
         "lobsterai-checkin" => Some(st.settings().lobsterai_checkin_hhmm),
         "minimax-checkin" => Some(st.settings().minimax_checkin_hhmm),
         "minimax-credits-sync" => Some(st.settings().minimax_credits_sync_hhmm),
+        "codearts-checkin" => Some(st.settings().codearts_checkin_hhmm),
+        "codearts-credits-sync" => Some(st.settings().codearts_credits_sync_hhmm),
         "buddy-ai-checkin" => Some(st.settings().buddy_ai_checkin_hhmm),
         "buddy-ai-renew" => Some(st.settings().buddy_ai_renew_hhmm),
         "buddy-ai-credits-sync" => Some(st.settings().buddy_ai_credits_sync_hhmm),
@@ -473,6 +489,8 @@ fn enabled(st: &AppState, key: &str) -> bool {
         "lobsterai-checkin" => st.settings().lobsterai_checkin_enabled,
         // MiniMax 签到：跟随全局设置开关（默认开）；双区账号再按各自区开关过滤（任务内）
         "minimax-checkin" => st.settings().minimax_checkin_enabled,
+        // CodeArts 签到：跟随全局设置开关（默认开）
+        "codearts-checkin" => st.settings().codearts_checkin_enabled,
         // Buddy 国际版每日活跃打卡（阶段 3b）：独立开关（默认关，国际档显式开启制）
         "buddy-ai-checkin" => crate::commands::workbuddy::buddy_ai_checkin_enabled(st),
         // Buddy 国际版凭证兜底续期（2026-10-16，默认开，任务配置页可关）
@@ -839,6 +857,39 @@ fn run_task(
         // 空池空转（普通 skipped 语义：mark_run 关闭当日重复触发，积分非奖励型漏跑可手动补）；
         // 全部失败返 Err 交冷却重试
         "minimax-credits-sync" => super::minimax_credits::run_sync_task(st),
+        // CodeArts 每日签到（VENU-37）：多账号；空池奖励型豁免（skipped_empty_pool，
+        // 当日导入账号下一 tick 补打）；抢轮次锁与 UI 路径互斥；可重试失败返 Err 交
+        // 30 分钟冷却重试（needs_relogin 凭证失效类在 done.failed_permanent 口径内剔除；
+        // noop（无活动/事件类）中性不算失败——活动 2026-12-31 截止后转常态不刷屏）
+        "codearts-checkin" => {
+            // 奖励型签到空池豁免（对齐 minimax 口径）：空池提前返回，
+            // tick 不 mark_run，当日导入账号下一 tick 补打
+            let pool = crate::store::docs::codearts_pool_load_checked(&crate::store::db(&st.data_dir))
+                .map_err(|e| format!("CodeArts 账号池读取失败：{e}"))?;
+            if pool.get("accounts").and_then(Value::as_array).map(|a| a.is_empty()).unwrap_or(true) {
+                return Ok(json!({ "ok": true, "skipped": "无 CodeArts 账号", "skipped_empty_pool": true }));
+            }
+            let Ok(_round) = super::codearts_checkin::try_acquire_round() else {
+                return Ok(json!({ "ok": true, "skipped": "已有 CodeArts 签到任务在执行中，本轮跳过", "skipped_busy": true }));
+            };
+            let done = super::codearts_checkin::run_checkin_round(st, &[], &mut |_| {});
+            let failed = done.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            // 永久性凭证失败（needs_relogin/gone）重试注定失败，从重试判定剔除
+            let failed_permanent = done
+                .get("failed_permanent")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
+            if failed - failed_permanent > 0 {
+                let ok = done.get("ok").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let already = done.get("already").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                let retryable = failed - failed_permanent;
+                return Err(format!("CodeArts 签到：{ok} 成功 / {already} 已领 / {retryable} 失败（稍后自动重试）"));
+            }
+            Ok(done)
+        }
+        // CodeArts 积分数据同步（VENU-37）：多账号取数 → 池缓存回写 + 当日快照；
+        // 空池空转（普通 skipped 语义）；全部失败返 Err 交冷却重试
+        "codearts-credits-sync" => super::codearts_credits::run_sync_task(st),
         // F-80 Qoder 每日签到：与 `--task-run qoder-checkin` 同款；抢轮次锁与 UI 路径互斥
         "qoder-checkin" => {
             // 奖励型签到空池豁免（审查修复，对齐 doubao/buddy-ai 口径）：空池提前

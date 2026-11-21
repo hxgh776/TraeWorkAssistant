@@ -37,6 +37,10 @@ pub const ROW_TABLES: &[&str] = &[
     "minimax_tokens",
     "minimax_checkin_results",
     "minimax_credits_history",
+    "codearts_accounts",
+    "codearts_tokens",
+    "codearts_checkin_results",
+    "codearts_credits_history",
 ];
 
 const DDL: &[&str] = &[
@@ -350,6 +354,31 @@ const DDL: &[&str] = &[
     )",
     // MiniMax 每日积分快照（pk = date 同日覆盖，365 天裁剪；看板余额趋势数据源）
     "CREATE TABLE IF NOT EXISTS minimax_credits_history (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    // CodeArts（华为云码道）账号池与凭证表（VENU-37 按旧 3.9.3 基准重建）：
+    // 账号池行文档（不含凭证）+ 凭证行文档（STS 三元组 + oauth 刷新材料，
+    // 仅本应用数据目录内；state.vscdb 只读不写回）
+    "CREATE TABLE IF NOT EXISTS codearts_accounts (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    "CREATE TABLE IF NOT EXISTS codearts_tokens (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    // CodeArts 每日签到结果（多账号），90 天滚动
+    "CREATE TABLE IF NOT EXISTS codearts_checkin_results (
+        pk         TEXT PRIMARY KEY,
+        data       TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    )",
+    // CodeArts 每日积分快照（pk = date 同日覆盖，365 天裁剪；看板余额趋势数据源）
+    "CREATE TABLE IF NOT EXISTS codearts_credits_history (
         pk         TEXT PRIMARY KEY,
         data       TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))

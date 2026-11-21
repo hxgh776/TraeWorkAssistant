@@ -448,6 +448,26 @@ pub struct Settings {
     /// MiniMax 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:35）
     #[serde(default = "default_minimax_credits_sync_hhmm")]
     pub minimax_credits_sync_hhmm: String,
+    // ── CodeArts（华为云码道；VENU-37 按旧 3.9.3 基准重建）──
+    /// CodeArts 每日签到调度开关（默认开；多账号 STS 凭证逐个签到）
+    #[serde(default = "default_true")]
+    pub codearts_checkin_enabled: bool,
+    /// CodeArts 每日签到触发时刻 HH:MM（默认 00:20：旧 3.9.3 行为基准 + 与 MiniMax 00:05 错峰 ≥10 分钟）
+    #[serde(default = "default_codearts_checkin_hhmm")]
+    pub codearts_checkin_hhmm: String,
+    /// CodeArts 签到多账号间隔秒（默认 3s，0 = 关闭；防上游频控）
+    #[serde(default = "default_checkin_gap_secs")]
+    pub codearts_checkin_gap_secs: u64,
+    /// CodeArts 积分数据同步模式：off | hourly | daily | every_hours（旧 3.9.3 基准为 daily 23:58——
+    /// 当日领取积分当日有效，23:58 快照捕捉当日余额末态；空 = 从未配置，由 state 归一为 daily）
+    #[serde(default)]
+    pub codearts_credits_sync_mode: String,
+    /// CodeArts 积分数据同步间隔小时数（every_hours 模式生效，默认 2，1..=24）
+    #[serde(default = "default_credits_sync_hours")]
+    pub codearts_credits_sync_hours: String,
+    /// CodeArts 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:58，旧 3.9.3 行为基准）
+    #[serde(default = "default_codearts_credits_sync_hhmm")]
+    pub codearts_credits_sync_hhmm: String,
     /// Qoder 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:40）
     #[serde(default = "default_qoder_credits_sync_hhmm")]
     pub qoder_credits_sync_hhmm: String,
@@ -507,7 +527,7 @@ pub struct Settings {
 /// 的写入侧（settings_set C4 校验）与读取侧（state.rs 归一）共用，杜绝多处
 /// 硬编码漂移——新增应用时仅需改此处与前端 APP_TABS
 pub fn is_valid_app_key(k: &str) -> bool {
-    matches!(k, "trae" | "buddy" | "qoder" | "doubao" | "buddy-ai" | "officeace" | "lobsterai" | "minimax")
+    matches!(k, "trae" | "buddy" | "qoder" | "doubao" | "buddy-ai" | "officeace" | "lobsterai" | "minimax" | "codearts")
 }
 
 fn default_api_port() -> u16 {
@@ -611,6 +631,15 @@ fn default_minimax_checkin_hhmm() -> String {
 /// MiniMax 积分数据同步 daily 模式默认 23:35（错峰 qoder 23:40 / trae 23:40）
 fn default_minimax_credits_sync_hhmm() -> String {
     "23:35".into()
+}
+/// CodeArts 每日签到默认 00:20（旧 3.9.3 行为基准；与 MiniMax 00:05 错峰 ≥10 分钟）
+fn default_codearts_checkin_hhmm() -> String {
+    "00:20".into()
+}
+/// CodeArts 积分数据同步 daily 模式默认 23:58（旧 3.9.3 行为基准：当日领取积分
+/// 当日有效，23:58 快照捕捉当日余额末态）
+fn default_codearts_credits_sync_hhmm() -> String {
+    "23:58".into()
 }
 fn default_qoder_credits_sync_hhmm() -> String {
     "23:40".into()

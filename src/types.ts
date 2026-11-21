@@ -54,9 +54,16 @@ export type ViewKey =
   | 'minimax-accounts'
   | 'minimax-checkin'
   | 'minimax-credits'
-  | 'minimax-settings';
+  | 'minimax-settings'
+  // CodeArts（华为云码道；VENU-37 按旧 3.9.3 基准重建；五页子导航对齐其他应用；
+  // 不补资源调度——无网关池）
+  | 'codearts-overview'
+  | 'codearts-accounts'
+  | 'codearts-checkin'
+  | 'codearts-credits'
+  | 'codearts-settings';
 
-/** 侧边栏应用切换（左下角 Tab）：Trae 当前菜单 / Buddy / Qoder（F-80）/ 豆包 / BuddyAI（buddy-ai 国际版）/ MiniMax */
+/** 侧边栏应用切换（左下角 Tab）：Trae 当前菜单 / Buddy / Qoder（F-80）/ 豆包 / BuddyAI（buddy-ai 国际版）/ MiniMax / CodeArts */
 export type AppKey =
   | 'trae'
   | 'buddy'
@@ -65,7 +72,8 @@ export type AppKey =
   | 'buddy-ai'
   | 'officeace'
   | 'lobsterai'
-  | 'minimax';
+  | 'minimax'
+  | 'codearts';
 
 /** 各应用的默认落地页 */
 export const APP_HOME_VIEW: Record<AppKey, ViewKey> = {
@@ -77,6 +85,7 @@ export const APP_HOME_VIEW: Record<AppKey, ViewKey> = {
   officeace: 'officeace-overview',
   lobsterai: 'lobsterai-overview',
   minimax: 'minimax-overview',
+  codearts: 'codearts-overview',
 };
 
 
@@ -482,6 +491,19 @@ export interface Settings {
   minimax_credits_sync_hours: string;
   /** MiniMax 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:35） */
   minimax_credits_sync_hhmm: string;
+  // ── CodeArts（华为云码道，VENU-37 按旧 3.9.3 基准重建）──
+  /** CodeArts 每日签到调度开关（默认开；多账号 STS 凭证逐个签到） */
+  codearts_checkin_enabled: boolean;
+  /** CodeArts 每日签到触发时刻 HH:MM（默认 00:20，旧 3.9.3 行为基准） */
+  codearts_checkin_hhmm: string;
+  /** CodeArts 签到多账号间隔秒（默认 3，0 = 关闭；防上游频控） */
+  codearts_checkin_gap_secs: number | null;
+  /** CodeArts 积分数据同步模式：off | hourly | daily | every_hours（旧 3.9.3 基准 daily） */
+  codearts_credits_sync_mode: string;
+  /** CodeArts 积分同步间隔小时数（every_hours 模式生效，默认 2，1..24） */
+  codearts_credits_sync_hours: string;
+  /** CodeArts 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:58，旧 3.9.3 行为基准） */
+  codearts_credits_sync_hhmm: string;
   /** Qoder 积分数据同步触发时刻 HH:MM（daily 模式生效，默认 23:40） */
   qoder_credits_sync_hhmm: string;
   /** Qoder 积分数据同步旧开关（保留兼容；调度已改按 qoder_credits_sync_mode 判定） */
@@ -2324,6 +2346,143 @@ export interface MinimaxCheckinLine {
   reward?: number;
   ok?: number;
   already?: number;
+  failed?: number;
+  total?: number;
+  error?: string;
+}
+
+// ── CodeArts（华为云码道；VENU-37 按旧 3.9.3 基准重建）──
+
+/** CodeArts 账号视图（脱敏；STS 三元组/refresh_token 只在后端 token 表，永不下发） */
+export interface CodeArtsAccountView {
+  id: string;
+  user_id: string;
+  name: string;
+  note: string;
+  /** local_import = 桌面端登录态导入（不主动刷新）；oauth = 浏览器 OAuth 独立链（可刷新）；aksk = 手工 AK/SK */
+  credential_source: string;
+  added_at: string | null;
+  /** 凭证是否失效（重新导入/授权后清除；APIG.0301/0303/0602 归此类） */
+  needs_relogin: boolean;
+  relogin_reason: string;
+  /** STS/SecurityToken 过期时刻（Unix 毫秒；0/缺省 = 未知或 AK/SK 永久） */
+  token_expires_at_ms?: number | null;
+  // 积分缓存（statistics/plugin 口径；积分同步/实时刷新回写）
+  credits_total: number | null;
+  credits_amount: number | null;
+  credits_used: number | null;
+  credits_expiring: number | null;
+  credits_bonus_remain: number | null;
+  package_name: string;
+  end_date: string;
+  credits_fetched_at: string | null;
+  // 最近签到（签到轮回写）
+  last_checkin_status: string | null;
+  last_checkin_date: string | null;
+}
+
+/** 本机桌面端登录态扫描结果（脱敏摘要，不含 AK/SK） */
+export interface CodeArtsLocalScan {
+  found: boolean;
+  data_dir?: string;
+  identity_name?: string;
+  expires_at_ms?: number;
+  expired?: boolean;
+  reason?: string;
+}
+
+/** OAuth 授权起点（codearts_oauth_start 返回） */
+export interface CodeArtsOauthStart {
+  authorize_url: string;
+  port: number;
+  expires_in_secs: number;
+}
+
+/** OAuth 轮询单步（codearts_oauth_poll / codearts_oauth_complete_url 返回） */
+export interface CodeArtsOauthPoll {
+  status: 'pending' | 'success' | 'failed';
+  message?: string;
+  account?: CodeArtsAccountView;
+}
+
+/** 凭证就绪预检（codearts_credential_status；不发网络） */
+export interface CodeArtsCredentialStatus {
+  found: boolean;
+  usable: boolean;
+  reason?: string;
+  expires_at_ms?: number;
+  credential_source?: string;
+  refreshable?: boolean;
+}
+
+/** CodeArts 签到结果行（codearts_checkin_results；90 天滚动） */
+export interface CodeArtsCheckinRecord {
+  date: string;
+  time: string;
+  time_ms: number;
+  user_id: string;
+  name: string;
+  /** success | already | noop | fail */
+  status: string;
+  message: string;
+  reward?: number | null;
+  campaigns?: { id: number; name: string; reward: number }[] | null;
+  /** needs_relogin = 凭证失效（重试注定失败，需重新导入/授权） */
+  fail_kind?: string;
+}
+
+/** CodeArts 单账号积分信息（codearts_credits_fetch 行；失败行带 error） */
+export interface CodeArtsCreditsInfo {
+  account_id: string;
+  user_id: string;
+  name: string;
+  package_name: string;
+  is_credit_package: boolean;
+  /** 套餐总积分 */
+  total: number;
+  used: number;
+  /** 余额 */
+  remain: number;
+  /** 即将到期（积分当日领取当日有效口径参考） */
+  expiring: number;
+  /** 赠送/签到积分余额（缺失 = 无数据） */
+  bonus_remain?: number;
+  end_date: string;
+  fetched_at: string;
+  error?: string;
+}
+
+/** CodeArts 每日积分快照（codearts_credits_history 行；pk=date 同日覆盖，365 天滚动） */
+export interface CodeArtsCreditsSnapshot {
+  date: string;
+  ts: number;
+  accounts: {
+    id: string;
+    user_id: string;
+    name: string;
+    package_name: string;
+    total: number;
+    used: number;
+    remain: number;
+    expiring: number;
+    bonus_remain?: number;
+    end_date: string;
+  }[];
+  failed?: number;
+}
+
+/** 签到进度事件（codearts-checkin-progress NDJSON 行；对齐 MinimaxCheckinLine，无区维度） */
+export interface CodeArtsCheckinLine {
+  type?: string;
+  index?: number;
+  user_id?: string;
+  name?: string;
+  status?: string;
+  message?: string;
+  reward?: number;
+  ok?: number;
+  already?: number;
+  noop?: number;
   failed?: number;
   total?: number;
   error?: string;

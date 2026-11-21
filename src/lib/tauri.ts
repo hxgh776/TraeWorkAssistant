@@ -15,6 +15,14 @@ import type {
   MinimaxCheckinRecord,
   MinimaxCreditsInfo,
   MinimaxCreditsSnapshot,
+  CodeArtsAccountView,
+  CodeArtsLocalScan,
+  CodeArtsOauthStart,
+  CodeArtsOauthPoll,
+  CodeArtsCredentialStatus,
+  CodeArtsCheckinRecord,
+  CodeArtsCreditsInfo,
+  CodeArtsCreditsSnapshot,
   AccountView,
   ApiServiceStatus,
   BuddyAiAccountView,
@@ -227,6 +235,43 @@ export const api = {
     // 全账号积分实时查询（回写池 + 当日快照）；失败行内带 error，全部失败时 reject
     creditsFetch: () => invoke<MinimaxCreditsInfo[]>('minimax_credits_fetch'),
     creditsHistory: (days = 30) => invoke<MinimaxCreditsSnapshot[]>('minimax_credits_history', { days }),
+  },
+  // ---- CodeArts（华为云码道；VENU-37 按旧 3.9.3 基准重建）----
+  codearts: {
+    accountsList: () => invoke<CodeArtsAccountView[]>('codearts_accounts_list'),
+    accountSave: (id: string, name?: string, note?: string) =>
+      invoke<void>('codearts_account_save', { id, name, note }),
+    accountRemove: (id: string) => invoke<void>('codearts_account_remove', { id }),
+    // 本机桌面端登录态只读扫描 / 导入（state.vscdb + DPAPI）；绝不写回
+    localScan: () => invoke<CodeArtsLocalScan>('codearts_local_scan'),
+    localImport: () => invoke<CodeArtsAccountView & { _merged?: boolean }>('codearts_local_import'),
+    // 手工 IAM AK/SK 导入（旧 3.9.3 命令同名同参；expiresAtMs 0 = 永久）
+    importManual: (
+      accessKey: string,
+      secretKey: string,
+      securityToken?: string,
+      expiresAtMs?: number,
+    ) =>
+      invoke<CodeArtsAccountView & { _merged?: boolean }>('codearts_account_import_manual', {
+        accessKey,
+        secretKey,
+        securityToken,
+        expiresAtMs,
+      }),
+    // 浏览器 OAuth（授权码 + PKCE + DPoP）：start 起回环回调并返回授权链接 → 浏览器授权；
+    // poll 单步轮询；complete_url 手工粘贴回调地址兜底；cancel 丢弃会话
+    oauthStart: () => invoke<CodeArtsOauthStart>('codearts_oauth_start'),
+    oauthPoll: () => invoke<CodeArtsOauthPoll>('codearts_oauth_poll'),
+    oauthCancel: () => invoke<void>('codearts_oauth_cancel'),
+    oauthCompleteUrl: (url: string) =>
+      invoke<CodeArtsOauthPoll>('codearts_oauth_complete_url', { url }),
+    credentialStatus: (id: string) => invoke<CodeArtsCredentialStatus>('codearts_credential_status', { id }),
+    // 签到（可选 user_ids 收窄；进度走 codearts-checkin-progress NDJSON 事件）
+    checkinStart: (userIds?: string[]) => invoke<void>('codearts_checkin_start', { userIds }),
+    checkinResults: (days = 30) => invoke<CodeArtsCheckinRecord[]>('codearts_checkin_results', { days }),
+    // 全账号积分实时查询（回写池 + 当日快照）；失败行内带 error，全部失败时 reject
+    creditsFetch: () => invoke<CodeArtsCreditsInfo[]>('codearts_credits_fetch'),
+    creditsHistory: (days = 30) => invoke<CodeArtsCreditsSnapshot[]>('codearts_credits_history', { days }),
   },
   env: {
     // TraeWork 合并后唯一客户端检测（原 env_check 已删，统一走 Trae CN 通道）

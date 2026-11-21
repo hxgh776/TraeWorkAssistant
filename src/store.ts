@@ -319,6 +319,14 @@ function defaultSettings(): Settings {
     minimax_credits_sync_mode: 'every_hours',
     minimax_credits_sync_hours: '2',
     minimax_credits_sync_hhmm: '23:35',
+    // CodeArts（华为云码道，VENU-37 重建；旧 3.9.3 基准：00:20 签到 / 23:58 积分同步——
+    // 当日领取积分当日有效，23:58 快照捕捉当日末态）
+    codearts_checkin_enabled: true,
+    codearts_checkin_hhmm: '00:20',
+    codearts_checkin_gap_secs: 3,
+    codearts_credits_sync_mode: 'daily',
+    codearts_credits_sync_hours: '2',
+    codearts_credits_sync_hhmm: '23:58',
     qoder_credits_sync_hhmm: '23:40',
     qoder_credits_sync_enabled: true,
     qoder_credits_sync_mode: 'every_hours',

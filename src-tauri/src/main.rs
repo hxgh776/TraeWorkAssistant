@@ -629,6 +629,21 @@ fn main() {
             commands::minimax::minimax_checkin_results,
             commands::minimax::minimax_credits_fetch,
             commands::minimax::minimax_credits_history,
+            commands::codearts::codearts_accounts_list,
+            commands::codearts::codearts_account_save,
+            commands::codearts::codearts_account_remove,
+            commands::codearts::codearts_local_scan,
+            commands::codearts::codearts_local_import,
+            commands::codearts::codearts_account_import_manual,
+            commands::codearts::codearts_oauth_start,
+            commands::codearts::codearts_oauth_poll,
+            commands::codearts::codearts_oauth_cancel,
+            commands::codearts::codearts_oauth_complete_url,
+            commands::codearts::codearts_credential_status,
+            commands::codearts::codearts_checkin_start,
+            commands::codearts::codearts_checkin_results,
+            commands::codearts::codearts_credits_fetch,
+            commands::codearts::codearts_credits_history,
             tasks::scheduler::scheduler_status,
         ])
         .setup(|app| {
@@ -968,6 +983,14 @@ fn main() {
                 let app2 = app.handle().clone();
                 let st = app.state::<AppState>();
                 commands::minimax::startup_auto_checkin(&app2, &st);
+            }
+
+            // CodeArts 启动自动补签（VENU-37）：多账号，独立开关（默认开），
+            // 抢不到跨进程轮次锁幂等跳过
+            {
+                let app2 = app.handle().clone();
+                let st = app.state::<AppState>();
+                commands::codearts::startup_auto_checkin(&app2, &st);
             }
 
             // CodeBuddy CLI 五重防护自动轮换（F-59）：独立后台线程按检查间隔执行，

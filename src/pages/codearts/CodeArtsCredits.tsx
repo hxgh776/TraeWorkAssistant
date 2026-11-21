@@ -6,11 +6,13 @@ import { Badge, EmptyState, Spinner, StatCard } from '../../components/ui';
 import { api } from '../../lib/tauri';
 import { useAppStore } from '../../store';
 import type { CodeArtsCreditsInfo, CodeArtsCreditsSnapshot } from '../../types';
+import { creditsViewRows, fmtCredits, snapshotRemainTotal } from './creditsModel';
 
-/** CodeArts · 积分看板页（VENU-37 重建）。
+/** CodeArts · 积分看板页（VENU-37 重建；VENU-39 旧格式快照兼容修复）。
  *  余额来自 statistics/plugin 快照（usageTotalPackageCredit 口径；缺失 = 无积分套餐，
  *  报错不用 0 冒充）；「近 30 天获得」来自签到结果 reward 合计；
- *  即将到期列提示当日有效口径（当日领取当日有效）。 */
+ *  即将到期列提示当日有效口径（当日领取当日有效）。
+ *  3.9.3 旧格式快照行（仅 free/purchased/total）缺套餐口径字段，如实显「—」。 */
 
 export default function CodeArtsCredits() {
   const pushToast = useAppStore((s) => s.pushToast);
@@ -38,23 +40,9 @@ export default function CodeArtsCredits() {
         .map(([date, perUid]) => ({ date, earned: [...perUid.values()].reduce((s, v) => s + v, 0) }))
         .sort((a, b) => a.date.localeCompare(b.date));
       setCheckinRewards(earned);
-      // 最新快照的账号余额 → accounts 视图（余额列展示）
+      // 最新快照的账号余额 → accounts 视图（余额列展示；旧格式行缺字段显「—」）
       const latest = snaps.length > 0 ? snaps[snaps.length - 1] : null;
-      const rows: CodeArtsCreditsInfo[] = (latest?.accounts ?? []).map((a) => ({
-        account_id: a.id,
-        user_id: a.user_id,
-        name: a.name,
-        package_name: a.package_name || '',
-        is_credit_package: true,
-        total: a.total,
-        used: a.used,
-        remain: a.remain,
-        expiring: a.expiring ?? 0,
-        bonus_remain: a.bonus_remain,
-        end_date: a.end_date || '',
-        fetched_at: latest ? new Date(latest.ts).toLocaleString() : '',
-      }));
-      setAccounts(rows);
+      setAccounts(creditsViewRows(latest));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -85,12 +73,12 @@ export default function CodeArtsCredits() {
     }
   };
 
-  // 趋势数据（快照 per-date 总余额 + 签到获得双线）
+  // 趋势数据（快照 per-date 总余额 + 签到获得双线；旧格式快照无可考余额 → 留空不冒充 0）
   const trend = useMemo(() => {
     const balance = new Map<string, number>();
     for (const s of snapshots) {
-      const total = s.accounts.reduce((sum, a) => sum + (a.remain ?? 0), 0);
-      balance.set(s.date, total);
+      const total = snapshotRemainTotal(s);
+      if (total != null) balance.set(s.date, total);
     }
     const earned = new Map(checkinRewards.map((r) => [r.date, r.earned]));
     const dates = [...new Set([...balance.keys(), ...earned.keys()])].sort();
@@ -101,6 +89,9 @@ export default function CodeArtsCredits() {
     }));
   }, [snapshots, checkinRewards]);
 
+  // 余额/已用仅在存在可考数值时合计展示（旧格式行如实显「—」，不用 0 冒充）
+  const hasRemain = accounts.some((a) => typeof a.remain === 'number');
+  const hasUsed = accounts.some((a) => typeof a.used === 'number');
   const totalRemain = accounts.reduce((s, a) => s + (a.remain ?? 0), 0);
   const totalUsed = accounts.reduce((s, a) => s + (a.used ?? 0), 0);
   const earned30 = checkinRewards.reduce((s, r) => s + r.earned, 0);
@@ -135,8 +126,8 @@ export default function CodeArtsCredits() {
       ) : (
         <>
           <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
-            <StatCard label="总余额" value={accounts.length > 0 ? totalRemain.toLocaleString() : '—'} tone="brand" />
-            <StatCard label="已用" value={accounts.length > 0 ? totalUsed.toLocaleString() : '—'} />
+            <StatCard label="总余额" value={hasRemain ? totalRemain.toLocaleString() : '—'} tone="brand" />
+            <StatCard label="已用" value={hasUsed ? totalUsed.toLocaleString() : '—'} />
             <StatCard label="今日签到获得" value={earnedToday > 0 ? `+${earnedToday}` : '0'} tone="green" />
             <StatCard label="近 30 天获得" value={earned30 > 0 ? `+${earned30.toLocaleString()}` : '0'} tone="green" />
             <StatCard
@@ -161,7 +152,7 @@ export default function CodeArtsCredits() {
                     {a.package_name && <Badge tone="slate">{a.package_name}</Badge>}
                     {a.end_date && <span className="text-xs text-slate-400">套餐期至 {a.end_date}</span>}
                     <span className="ml-auto text-slate-600 dark:text-zinc-300">
-                      余额 <b>{a.remain.toLocaleString()}</b> · 总额 <b>{a.total.toLocaleString()}</b> · 已用 <b>{a.used.toLocaleString()}</b>
+                      余额 <b>{fmtCredits(a.remain)}</b> · 总额 <b>{fmtCredits(a.total)}</b> · 已用 <b>{fmtCredits(a.used)}</b>
                       {typeof a.bonus_remain === 'number' && <> · 赠送 <b>{a.bonus_remain.toLocaleString()}</b></>}
                     </span>
                   </div>

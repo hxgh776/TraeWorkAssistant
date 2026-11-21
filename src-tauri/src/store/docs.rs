@@ -761,6 +761,37 @@ mod tests {
         assert_eq!(got.cooldowns["u1"].error_type, "SessionDead");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// VENU-39 回归：minimax_checkin_results 必须在签到结果表白名单内——
+    /// 落库（checkin_results_upsert_into）与读取（checkin_results_since）共用同一闸门，
+    /// 漏登记曾导致 MiniMax 签到结果全链路被拒（落库仅 app_log 记错、读取恒 Err）。
+    #[test]
+    fn minimax_checkin_results_whitelist_roundtrip() {
+        let (_dir, s) = tmp_store("mmres");
+        let rec = json!({
+            "date": chrono::Local::now().format("%Y-%m-%d").to_string(),
+            "time": "00:05:00",
+            "time_ms": 1795004680043i64,
+            "user_id": "mm-u1",
+            "name": "MiniMax 测试账号",
+            "region": "minimax",
+            "status": "success",
+            "message": "签到成功（连续第 1 天）",
+            "reward": 400,
+            "fail_kind": Value::Null,
+        });
+        minimax_checkin_results_upsert(&s, &rec).expect("白名单补登记后落库不得再被拒");
+        let rows =
+            checkin_results_since(&s, "minimax_checkin_results", 30).expect("读取与落库同闸门，放行");
+        assert_eq!(rows.len(), 1, "写入 1 条读回 1 条");
+        assert_eq!(rows[0].get("status").and_then(Value::as_str), Some("success"));
+        assert_eq!(rows[0].get("reward").and_then(Value::as_i64), Some(400));
+
+        // 白名单守门语义不变：非签到结果表依旧拒绝（读/写两侧）
+        assert!(checkin_results_upsert_into(&s, "not_a_results_table", &rec).is_err());
+        assert!(checkin_results_since(&s, "not_a_results_table", 30).is_err());
+        let _ = std::fs::remove_dir_all(&_dir);
+    }
 }
 
 use serde_json::{json, Value};
@@ -2495,6 +2526,8 @@ pub fn qoder_credits_history_upsert(s: &Store, snap: &Value) -> Result<(), Strin
 const CHECKIN_RESULT_TABLES: &[&str] = &[
     "officeace_checkin_results",
     "lobsterai_checkin_results",
+    // VENU-36 重建 MiniMax 新增的结果表（VENU-39 修复：白名单漏登记导致落库/读取全链路被拒）
+    "minimax_checkin_results",
     "codearts_checkin_results",
 ];
 

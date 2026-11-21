@@ -2431,18 +2431,19 @@ export interface CodeArtsCheckinRecord {
   fail_kind?: string;
 }
 
-/** CodeArts 单账号积分信息（codearts_credits_fetch 行；失败行带 error） */
+/** CodeArts 单账号积分信息（codearts_credits_fetch 行；失败行带 error）
+ *  VENU-39 兼容：旧 3.9.3 快照映射行缺套餐口径字段（undefined 显「—」，不用 0 冒充） */
 export interface CodeArtsCreditsInfo {
   account_id: string;
   user_id: string;
   name: string;
   package_name: string;
   is_credit_package: boolean;
-  /** 套餐总积分 */
-  total: number;
-  used: number;
-  /** 余额 */
-  remain: number;
+  /** 套餐总积分（旧格式快照行缺字段） */
+  total?: number;
+  used?: number;
+  /** 余额（旧格式快照行缺字段） */
+  remain?: number;
   /** 即将到期（积分当日领取当日有效口径参考） */
   expiring: number;
   /** 赠送/签到积分余额（缺失 = 无数据） */
@@ -2452,21 +2453,23 @@ export interface CodeArtsCreditsInfo {
   error?: string;
 }
 
-/** CodeArts 每日积分快照（codearts_credits_history 行；pk=date 同日覆盖，365 天滚动） */
+/** CodeArts 每日积分快照（codearts_credits_history 行；pk=date 同日覆盖，365 天滚动）
+ *  VENU-39 兼容：3.9.3 旧行 accounts 元素仅 {free, purchased, total, name, user_id}，
+ *  套餐口径字段可能缺失，消费方须判空。 */
 export interface CodeArtsCreditsSnapshot {
   date: string;
   ts: number;
   accounts: {
-    id: string;
+    id?: string;
     user_id: string;
     name: string;
-    package_name: string;
-    total: number;
-    used: number;
-    remain: number;
-    expiring: number;
+    package_name?: string;
+    total?: number;
+    used?: number;
+    remain?: number;
+    expiring?: number;
     bonus_remain?: number;
-    end_date: string;
+    end_date?: string;
   }[];
   failed?: number;
 }

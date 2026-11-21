@@ -6,9 +6,13 @@
 
 ---
 
-## [Unreleased] · 2026-11-21 · CodeArts（华为云码道）应用重建（STS 凭证 / 签到 / 积分 / 调度，VENU-37）
+## [3.9.5] · 2026-11-21 · 果办/龙虾改名 OfficeAce/LobsterAI 并补齐五页菜单 + MiniMax Code 与 CodeArts 应用重建
+
+> 3.9.4 为 11-18 的本机内测构建（基于 9b2058d 的果办/龙虾签到功能，未合入 main、未发布），无独立发布条目；版本号由本版 3.9.5 接续。
 
 ### 新功能
+
+**CodeArts（华为云码道）应用重建（VENU-37 · 11-21）**
 
 - **CodeArts 应用回归**：侧边栏新增 CodeArts 应用 Tab 与五页子导航（概述 / 账号管理 / 每日签到 / 积分看板 / 环境配置）。该应用曾存在于 3.9.3 交付分支（未合入 main，构建 3.9.4 后消失），本次按旧 3.9.3 行为基准 + VENU-5 定稿接口规格在 `main` 重建；无资源调度页（无网关池，与其他签到域应用一致）。
 - **三通道凭证**：① 桌面端登录态导入（推荐）：只读 `%APPDATA%\codearts-agent`（DPAPI 主密钥 + `state.vscdb` 华为云会话），**不写回该库、不消费 refresh_token**——绝不破坏码道客户端登录；过期会话拒绝入池并给出「重新登录后扫描」指引；② 浏览器 OAuth：授权码 + PKCE + DPoP，本机回环回调（端口 ≥10000）+ 手工粘贴回调地址兜底，本应用自建独立授权链可自动刷新；③ 手工 IAM AK/SK（高级用户，旧 3.9.3 同名命令）。STS 有效期与 `needs_relogin` 状态在 UI 显式展示。
@@ -19,9 +23,7 @@
 
 ---
 
-## [Unreleased] · 2026-11-20 · MiniMax Code 应用重建（双区签到 / 积分看板 / 调度，VENU-36）
-
-### 新功能
+**MiniMax Code 应用重建（VENU-36 · 11-20）**
 
 - **MiniMax Code 应用回归**：侧边栏新增 MiniMax 应用 Tab 与五页子导航（概述 / 账号管理 / 每日签到 / 积分看板 / 环境配置）。该应用曾存在于 3.9.3 交付分支（未合入 main，构建 3.9.4 后消失），本次按旧 3.9.3 行为基准 + VENU-5 定稿接口规格在 `main` 重建。
 - **双区账号接入**：国内区（`minimax` / agent.minimax.cn）与国际区（`minimax-global` / agent.minimax.io）账号按区归属、签到与展示。凭证双通道：① OAuth 设备码授权（RFC 8628 + S256 PKCE，独立刷新链，不影响本机 MiniMax Code 客户端登录，可自动刷新）；② 本机 `~/.minimax/auth/prod/{cn|en}/mcode-public/auth.json` 只读导入（不写回该文件、不主动刷新，避免一次性轮换作废客户端登录链）。无 PAT 通道。
@@ -31,14 +33,22 @@
 
 ---
 
-## [Unreleased] · 2026-11-16 · 新增 OfficeAce（果办）/ LobsterAI（有道龙虾）自动签到
+**OfficeAce（果办）/ LobsterAI（龙虾）改名与五页菜单（VENU-35 · 11-19）**
 
-### 新功能
+- **应用 Tab 改名**：「果办」→ **OfficeAce**、「龙虾」→ **LobsterAI**（悬停 title 中文说明保留）；应用 Tab 条由 4 等列栅格改 flex-wrap 自然宽度，9 字符英文 Tab 名不再横向溢出互相压字。
+- **五页应用菜单**：两应用菜单由单页「每日签到」补齐为 **概述 / 账号管理 / 每日签到 / 积分看板 / 环境配置**，与其他应用对齐（无网关池，不补资源调度）；进入应用默认落地「概述」，每日签到页沿用原页面能力不回退。
+- **只读积分看板数据**：新增 `officeace_quota`（/v1/subscription bonus_skus 逐活动 total/used/remaining + 汇总；bonus_skus 缺失或上游失败返回错误，禁止 0 冒充）与 `lobsterai_quota`（连签/claimed 数据 + 余额宽容提取，只认明确余额键，认不出显「未知」）；均走与签到相同的本机登录态，只读不写回、不落盘凭据。
+
+**OfficeAce（果办）/ LobsterAI（有道龙虾）自动签到（11-16 · 已随 3.9.4 内测构建装机）**
 
 - **OfficeAce（华为果办）每日签到**：复用本机桌面端登录态（只读 `storage.sqlite` + Windows 凭据管理器 provider-state，不保存凭据），按 V11-HMAC-SHA256 签名调用控制面 `POST /v1/subscription/bonus/claim` 领取每日奖励积分；签到前后对比 `bonus_skus` 余额增量，如实展示「已签到 / +N 积分 / 失败原因」。桌面端临时凭证约 2 小时有效，过期时给出「打开并登录 OfficeAce 客户端后重试」的明确指引。
 - **LobsterAI（网易有道龙虾）每日签到**：复用本机 `%APPDATA%\LobsterAI\lobsterai.sqlite` 登录态，按「活动 slot → context → check_in → context 复核」流程签约，只有 `claimedToday/claimedDays` 确实变化才计成功；支持连签天数与剩余天数展示。
 - **应用内调度与启动补签**：两平台各新增独立任务项（默认 OfficeAce 09:40 / LobsterAI 09:50，可改），并提供 `--task-run officeace-checkin` / `--task-run lobsterai-checkin` CLI 任务；跨进程轮次锁与 UI 手动签到互斥，空登录态时如实报失败而非静默跳过。
 - **新增应用 Tab 与签到页**：侧边栏新增「果办」「龙虾」两个应用入口，页面含本机账号状态、立即签到、NDJSON 进度、近 30 天记录与自动签到时时刻/开关设置；签到结果落 SQLite（90 天滚动）。
+
+### 验证
+
+- `cargo test`（1332 通过 / 0 失败 / 17 忽略）、`npm run build`（tsc + vite 零错误）、`npx vitest run`（106 用例）全部通过；`tauri build --no-bundle` 产物 exe 文件版本 3.9.5，真机安装回归通过（详见发布说明与提交记录）。
 
 ---
 

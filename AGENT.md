@@ -1,4 +1,4 @@
-# AGENT.md — AI Work 助手 (ai-work-assistant) v3.9.3
+# AGENT.md — AI Work 助手 (ai-work-assistant) v3.9.5
 
 > 项目级别速查手册。给后续会话（人或 AI）秒接上下文用。任何会改契约的提交请同步更新本文档。
 > 注：品牌已由 Trae Work Assistant 迁移为 **AI Work 助手（ai-work-assistant）**，本机仓库目录暂为 `trae-work-assistant`，后续可整体重命名。
@@ -75,7 +75,7 @@ ai-work-assistant/
 │       │   ├── auth.rs           # API Key 鉴权（Bearer + x-api-key 双风格）
 │       │   ├── models_sync.rs    # 模型列表配置化（api_models.json）+ 官网 batch_get_detail_param 同步
 │       │   └── api_logger.rs     # API 请求日志
-│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）；minimax/ 为目录模块（common/accounts/oauth/checkin/credits——设备码流、auth.json 导入、双区签到与积分）；codearts/ 为目录模块（common/accounts/credentials/checkin/credits——登录态/AK-SK/OAuth 三通道、签到与积分）
+│       └── commands/             # env / cert / proxy / accounts / checkin / switch / misc / profile / api_server / oauth / trae_apps(本机 Trae 账号发现) / process(三级关闭) / updater / wb_config(wb 手工配置读写)；workbuddy/ 为目录模块（common/accounts/checkin/credits/cli/chatdata/oauth/env_reset，mod.rs pub use 保持命令路径不变）；minimax/ 为目录模块（common/accounts/oauth/checkin/credits——设备码流、auth.json 导入、双区签到与积分）；codearts/ 为目录模块（common/accounts/credentials/checkin/credits——登录态/AK-SK/OAuth 三通道、签到与积分）；officeace.rs / lobsterai.rs（果办/龙虾：本机登录态 status / 签到启动 / 结果 / 只读积分）
 │       └── tasks/                # 后台业务直调模块（trae_checkin / wb_checkin / wb_common / wb_credits / doubao_session / doubao_quota / doubao_chats / ui_click）
 │           ├── trae_checkin.rs   # 批量签到（vault 解密内存传递，无子进程）
 │           ├── wb_checkin.rs     # WorkBuddy 签到/成长/续期（run_checkin_round / run_growth_round / run_renew_only）
@@ -86,6 +86,8 @@ ai-work-assistant/
 │           ├── codearts_oauth.rs  # CodeArts 浏览器 OAuth 通道协议（PKCE + DPoP ES256 + 授权码/refresh 换票）
 │           ├── codearts_checkin.rs # CodeArts 每日签到（delivery→claim，只领 claimable+MANUAL_CLAIM；业务码 0/40001/4006/4004/4003 分类；多账号）
 │           ├── codearts_credits.rs # CodeArts 积分（statistics/plugin 归一 + 快照落库；usageTotalPackageCredit 缺失报因不冒充 0）
+│           ├── officeace_checkin.rs # OfficeAce（果办）签到/只读积分（本机 storage.sqlite + Windows 凭据管理器 provider-state 登录态，临时 AK/SK 约 2h；V11-HMAC-SHA256 签名）
+│           ├── lobsterai_checkin.rs # LobsterAI（龙虾）签到/只读积分（本机 lobsterai.sqlite 登录态；slot→context→check_in→复核）
 │           └── doubao_*.rs       # 豆包会话续期 / 额度巡检 / 对话导出
 │       └── switcher/            # 登录态切换器（原 PS 桥 trae-switch-bridge.ps1 全量 Rust 化）
 │           ├── mod.rs           # run_action 入口 + 7 Action 编排 + ProgressSink（TauriSink/CliSink）
@@ -233,6 +235,12 @@ ai-work-assistant/
 | CodeArts | `codearts_checkin_results(days?)` | 签到日志（codearts_checkin_results 表 90 天滚动，pk=date\|user_id\|time_ms） |
 | CodeArts | `codearts_credits_fetch()` / `codearts_credits_history(days?)` | 全账号实时积分（`GET /snap-manager/v1/statistics/plugin` 普通身份头无 Agent-Type；只读统计不消耗积分）：usageTotalPackageCredit 缺失 = 无积分套餐报因不用 0 冒充；余额/已用/即将到期/赠送（usageBonusPackageCredit）拆分 + package_name + end_date；成功回写池缓存键 + 当日快照覆盖落库（365 天滚动） |
 | CodeArts | 调度：`codearts-checkin`（默认 00:20，settings.codearts_checkin_enabled/hhmm 可改）+ `codearts-credits-sync`（credits 四模式，默认 **daily 23:58**——旧 3.9.3 基准：当日领取积分当日有效，23:58 快照捕捉当日末态） | 应用内调度器任务（CLI `--task-run codearts-checkin / codearts-credits-sync` 同款实现；跨进程轮次锁 "codearts"/"round"；空池奖励型豁免 skipped_empty_pool，needs_relogin 失败剔除重试判定；活动官方截止 2026-12-31 后转 noop 常态不报错刷屏） |
+| OfficeAce | `officeace_status()` / `officeace_quota()` | 本机登录态状态（`%LOCALAPPDATA%\Programs\OfficeAce\data\storage.sqlite` oc_kv_string 最新会话 + Windows 凭据管理器 `wincred://OfficeAce/auth-sessions/.../provider-state` 临时 AK/SK/STS，约 2h 有效，过期给「打开并登录 OfficeAce 客户端后重试」指引）/ 只读积分（bonus_skus 逐活动 total/used/remaining + 汇总；缺失或上游失败报 Err 禁止 0 冒充） |
+| OfficeAce | `officeace_checkin_start() → NDJSON officeace-checkin-progress` / `officeace_checkin_results(days?)` | Rust 直调 `tasks/officeace_checkin.rs::run_checkin_round`（V11-HMAC-SHA256 签名调控制面 `POST /v1/subscription/bonus/claim` 领每日奖励积分；签到前后对比 bonus_skus 余额增量如实展示「已签到 / +N 积分 / 失败原因」；结果落 officeace_checkin_results 表 90 天滚动） |
+| OfficeAce | 调度：`officeace-checkin`（默认 09:40，settings.officeace_checkin_enabled/hhmm 可改） | 应用内调度器任务（CLI `--task-run officeace-checkin` 同款实现；跨进程轮次锁 + UI 手动签到互斥；空登录态如实报失败不静默跳过；启动补签） |
+| LobsterAI | `lobsterai_status()` / `lobsterai_quota()` | 本机登录态状态（`%APPDATA%\LobsterAI\lobsterai.sqlite` kv 表）/ 只读积分（client-activities context 连签/claimed 数据 + 余额宽容提取，只认明确余额键，认不出显「未知」） |
+| LobsterAI | `lobsterai_checkin_start() → NDJSON lobsterai-checkin-progress` / `lobsterai_checkin_results(days?)` | Rust 直调 `tasks/lobsterai_checkin.rs::run_checkin_round`（活动 slot → context → check_in → context 复核流程签到，仅 claimedToday/claimedDays 确实变化才计成功；连签天数与剩余天数展示；结果落 lobsterai_checkin_results 表 90 天滚动） |
+| LobsterAI | 调度：`lobsterai-checkin`（默认 09:50，settings.lobsterai_checkin_enabled/hhmm 可改） | 应用内调度器任务（CLI `--task-run lobsterai-checkin` 同款实现；跨进程轮次锁 + UI 手动签到互斥；空登录态如实报失败不静默跳过；启动补签） |
 
 ### 5.1 Trae 账号发现与双 uid 体系（F-08，trae_apps.rs；双应用合并适配 2026-10-14）
 

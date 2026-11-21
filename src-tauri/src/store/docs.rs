@@ -792,6 +792,72 @@ mod tests {
         assert!(checkin_results_since(&s, "not_a_results_table", 30).is_err());
         let _ = std::fs::remove_dir_all(&_dir);
     }
+
+    /// VENU-39 回归：3.9.3 旧格式池行（身份字段 uid/nickname，无 user_id/name，
+    /// 本机实存行形态）经 pool load 归一后读方拿到 user_id/name——签到结果
+    /// 记录缺 user_id 曾导致落库被拒（「签到结果缺少 date/user_id/time_ms」）。
+    /// 归一只在缺失时回退填充；库内旧行不被读取路径改写。
+    #[test]
+    fn pool_legacy_identity_rows_normalized_on_load() {
+        for (table, load, load_checked) in [
+            (
+                "minimax_accounts",
+                minimax_pool_load as fn(&Store) -> Value,
+                minimax_pool_load_checked as fn(&Store) -> Result<Value, String>,
+            ),
+            (
+                "codearts_accounts",
+                codearts_pool_load as fn(&Store) -> Value,
+                codearts_pool_load_checked as fn(&Store) -> Result<Value, String>,
+            ),
+        ] {
+            let (dir, s) = tmp_store("poollegacy");
+            // 本机旧格式行（凭据字段从略，不影响身份归一）
+            let legacy = json!({
+                "id": if table.starts_with("minimax") { "mm-4d5f27c2f695" } else { "ca-b0be82d2af31" },
+                "region": if table.starts_with("minimax") { "minimax" } else { "cn" },
+                "uid": "legacy-uid-1",
+                "nickname": "旧构建昵称",
+                "credential_source": "device_code",
+            });
+            s.row_upsert(table, "mm-4d5f27c2f695", &legacy).unwrap();
+
+            let pool = load(&s);
+            let acc = &pool["accounts"][0];
+            assert_eq!(acc["user_id"], json!("legacy-uid-1"), "{table}: uid 回退填充");
+            assert_eq!(acc["name"], json!("旧构建昵称"), "{table}: nickname 回退填充");
+            assert_eq!(acc["nickname"], json!("旧构建昵称"), "{table}: 旧字段保留不删");
+            let pool2 = load_checked(&s).expect("checked 读不因旧行失败");
+            assert_eq!(pool2["accounts"][0]["user_id"], json!("legacy-uid-1"));
+
+            // 库内旧行不被读取路径改写（写回收敛交给真实写路径）
+            let (raw_pk, raw) = s.rows_all(table).unwrap().into_iter().next().unwrap();
+            let raw: Value = raw;
+            assert!(raw.get("user_id").is_none(), "读路径不写库");
+            assert_eq!(raw_pk, "mm-4d5f27c2f695");
+
+            // 新格式行（已有非空 user_id/name）不被旧字段覆盖；空白新字段才回退
+            s.row_upsert(
+                table,
+                "new-1",
+                &json!({
+                    "id": "new-1", "user_id": "u-new", "name": "新名",
+                    "uid": "should-not-override", "nickname": "亦不覆盖",
+                }),
+            )
+            .unwrap();
+            let pool3 = load(&s);
+            let new_acc = pool3["accounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["id"] == json!("new-1"))
+                .unwrap();
+            assert_eq!(new_acc["user_id"], json!("u-new"), "非空新字段优先");
+            assert_eq!(new_acc["name"], json!("新名"));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }
 
 use serde_json::{json, Value};
@@ -2581,6 +2647,43 @@ pub fn lobsterai_checkin_results_upsert(s: &Store, rec: &Value) -> Result<(), St
 
 // ── MiniMax Code 账号池 / 凭证 / 签到结果 / 积分快照（VENU-36 重建，形态对齐 qoder_*）──
 
+/// 旧 3.9.3 池行身份字段归一（VENU-39 兼容）：旧行身份为 uid/nickname，
+/// 重建后统一为 user_id/name。仅在 user_id/name 缺失或空白时回退填充，
+/// 不覆盖已有非空值；库内旧行不动，读方透明——后续任何池写回会把归一结果
+/// 落盘，自然收敛到新格式。
+fn normalize_legacy_pool_identities(pool: &Value) -> Value {
+    let mut p = pool.clone();
+    let Some(accounts) = p.get_mut("accounts").and_then(Value::as_array_mut) else {
+        return p;
+    };
+    for a in accounts.iter_mut() {
+        if !a.is_object() {
+            continue;
+        }
+        for (new_key, old_key) in [("user_id", "uid"), ("name", "nickname")] {
+            let cur_blank = a
+                .get(new_key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .is_empty();
+            if !cur_blank {
+                continue;
+            }
+            let legacy = a
+                .get(old_key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !legacy.is_empty() {
+                a[new_key] = json!(legacy);
+            }
+        }
+    }
+    p
+}
+
 /// 读整池（结构 {accounts: [...]}；账号对象原样保真，不含凭证——凭证在 minimax_tokens）
 pub fn minimax_pool_load(s: &Store) -> Value {
     let accounts: Vec<Value> = s
@@ -2589,7 +2692,7 @@ pub fn minimax_pool_load(s: &Store) -> Value {
         .into_iter()
         .map(|(_, data)| data)
         .collect();
-    json!({ "accounts": accounts })
+    normalize_legacy_pool_identities(&json!({ "accounts": accounts }))
 }
 
 /// 可失败口径读整池（审查 M-4 同款：读失败走 Err 重试链，不静默吞成空池）
@@ -2599,7 +2702,7 @@ pub fn minimax_pool_load_checked(s: &Store) -> Result<Value, String> {
         .into_iter()
         .map(|(_, data)| data)
         .collect();
-    Ok(json!({ "accounts": accounts }))
+    Ok(normalize_legacy_pool_identities(&json!({ "accounts": accounts })))
 }
 
 /// 写整池（pk = 账号 id，缺 id 用序号占位）
@@ -2702,7 +2805,7 @@ pub fn codearts_pool_load(s: &Store) -> Value {
         .into_iter()
         .map(|(_, data)| data)
         .collect();
-    json!({ "accounts": accounts })
+    normalize_legacy_pool_identities(&json!({ "accounts": accounts }))
 }
 
 /// 可失败口径读整池（审查 M-4 同款：读失败走 Err 重试链，不静默吞成空池）
@@ -2712,7 +2815,7 @@ pub fn codearts_pool_load_checked(s: &Store) -> Result<Value, String> {
         .into_iter()
         .map(|(_, data)| data)
         .collect();
-    Ok(json!({ "accounts": accounts }))
+    Ok(normalize_legacy_pool_identities(&json!({ "accounts": accounts })))
 }
 
 /// 写整池（pk = 账号 id，缺 id 用序号占位）

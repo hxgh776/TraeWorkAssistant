@@ -131,10 +131,11 @@ fn event_gated_titles(items: &[Value]) -> Vec<String> {
 
 /// delivery 全量活动的如实枚举（VENU-42：每个渠道的领取结果对用户可见）。
 /// 只归类不可自动领取项（可自动领取项走 claim 路径，逐项如实落库）：
-/// `status==CONFIRMED/CLAIMED` → 已领取/已发放；`triggerMode==TRIGGER_EVENT` →
-/// 事件触发类（列标题，官方端完成）；其余 → 暂不可领（需官方端完成对应条件，列标题
-/// ——学生认证 STUDENT_CERTIFIED 渠道无论 claimable 与否都落此桶（类型被排除代领），
-/// 标题必须可见，复核口径「展示 + 引导」）。
+/// `status==CONFIRMED/CLAIMED/CONSUMED` → 已领取/已发放（CONSUMED = 已领且积分已
+/// 消耗，2026-11-22 装机版真机 dump 实测的新状态值，同属已领）；`triggerMode==
+/// TRIGGER_EVENT` → 事件触发类（列标题，官方端完成）；其余 → 暂不可领（需官方端
+/// 完成对应条件，列标题——学生认证 STUDENT_CERTIFIED 渠道无论 claimable 与否都落
+/// 此桶（类型被排除代领），标题必须可见，复核口径「展示 + 引导」）。
 fn delivery_enumeration(items: &[Value]) -> String {
     let mut confirmed = 0usize;
     let mut gated: Vec<String> = Vec::new();
@@ -151,7 +152,11 @@ fn delivery_enumeration(items: &[Value]) -> String {
         let confirmed_item = item
             .get("status")
             .and_then(Value::as_str)
-            .map(|s| s.eq_ignore_ascii_case("CONFIRMED") || s.eq_ignore_ascii_case("CLAIMED"))
+            .map(|s| {
+                s.eq_ignore_ascii_case("CONFIRMED")
+                    || s.eq_ignore_ascii_case("CLAIMED")
+                    || s.eq_ignore_ascii_case("CONSUMED")
+            })
             .unwrap_or(false);
         let gated_item = item
             .pointer("/extra/triggerMode")
@@ -720,6 +725,14 @@ mod tests {
                 "benefitAmount": 1000,
                 "extra": { "triggerMode": "MANUAL_CLAIM" }
             }),
+            // 已领取且积分已消耗（CONSUMED——2026-11-22 装机版真机 dump 实测状态值，
+            // 同属已领，不得误落「暂不可领」）
+            json!({
+                "campaignId": 34, "title": "Daily Check-in: Claim 100 Credits",
+                "type": "USER_LOGIN", "claimable": false, "status": "CONSUMED",
+                "benefitAmount": 100,
+                "extra": { "triggerMode": "MANUAL_CLAIM" }
+            }),
             // 学生认证（STUDENT_CERTIFIED）**已认证转可领**（claimable=true）仍不代领
             // （复核修复项 1）——归「暂不可领（需官方端完成对应条件）」桶，标题可见
             json!({
@@ -751,8 +764,8 @@ mod tests {
         assert_eq!(gated, vec!["学生认证奖励".to_string()]);
         let enumeration = delivery_enumeration(&items);
         // 枚举更宽：所有 TRIGGER_EVENT 渠道（含不可领）都列标题，渠道可见性优先
-        assert!(enumeration.contains("delivery 共 6 个活动"), "{enumeration}");
-        assert!(enumeration.contains("已领取/已发放 1"), "{enumeration}");
+        assert!(enumeration.contains("delivery 共 7 个活动"), "{enumeration}");
+        assert!(enumeration.contains("已领取/已发放 2"), "{enumeration}");
         assert!(
             enumeration.contains(
                 "事件触发类 2 个需在官方端完成（学生认证奖励、Skill 大赛事件奖励）"
@@ -769,7 +782,7 @@ mod tests {
         // 只在枚举中如实展示（标题 + 需官方端完成条件）
         assert!(!claimable_manual(&items[2]));
         let noop = noop_delivery_message(&items);
-        assert!(noop.starts_with("无可自动领取的活动；delivery 共 6 个活动"), "{noop}");
+        assert!(noop.starts_with("无可自动领取的活动；delivery 共 7 个活动"), "{noop}");
         // 全部可领时枚举只剩总数（USER_LOGIN 可领项不进枚举）
         let all_claimable = vec![json!({
             "campaignId": 9, "type": "USER_LOGIN", "claimable": true

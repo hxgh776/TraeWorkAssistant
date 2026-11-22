@@ -12,6 +12,7 @@ import {
 } from 'recharts';
 import PageHeader from '../../components/PageHeader';
 import { StatCard, Badge } from '../../components/ui';
+import { aggregateCheckinTrends } from '../../components/overviewTrendModel';
 import { api } from '../../lib/tauri';
 import { useAppStore } from '../../store';
 import { useIsDark } from '../../lib/useIsDark';
@@ -25,14 +26,6 @@ import type { ViewKey, LocalCheckinRecord, OfficeAceQuota, OfficeAceStatus } fro
  * 差异：本机单账号（只读桌面端登录态），无账号池 / 积分榜；积分余额读只读 quota 命令，
  * 上游不可达时显「—」并如实提示（不用 0 冒充）。
  */
-
-/** 概述页近 30 天签到趋势数据点（由 LocalCheckinRecord 按日聚合） */
-interface TrendPoint {
-  date: string;
-  ok: number;
-  already: number;
-  failed: number;
-}
 
 /** 配置导航步骤（对齐 Qoder/Buddy 概述 SetupGuide 形态；optional 步骤不计入完成度） */
 interface Step {
@@ -59,24 +52,6 @@ function fmtNum(value: number | null | undefined): string {
 
 function localDateStr(dt: Date): string {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-}
-
-/** 近 30 天趋势聚合（口径对齐 QoderOverview.aggregateTrends：同日同账号去重，未知状态不入桶） */
-function aggregateTrends(records: LocalCheckinRecord[]): TrendPoint[] {
-  const map = new Map<string, TrendPoint>();
-  const seen = new Set<string>();
-  for (const r of records) {
-    if (!r.date) continue;
-    const key = `${r.date}|${r.user_id || r.name}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const p = map.get(r.date) ?? { date: r.date, ok: 0, already: 0, failed: 0 };
-    if (r.status === 'success') p.ok += 1;
-    else if (r.status === 'already') p.already += 1;
-    else if (r.status === 'fail') p.failed += 1;
-    map.set(r.date, p);
-  }
-  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export default function OfficeAceOverview() {
@@ -152,7 +127,8 @@ export default function OfficeAceOverview() {
     [records],
   );
 
-  const trends = useMemo(() => aggregateTrends(records), [records]);
+  // 近 30 天趋势聚合（共享口径：任一成功即当日已领，全失败才计失败——overviewTrendModel 含单测）
+  const trends = useMemo(() => aggregateCheckinTrends(records), [records]);
 
   // 告警提醒（本机单账号）：凭证过期（logged_in 但 credential_fresh=false）+ 登录态失效
   //（已安装但未登录）；未安装属环境问题不计入（无凭据可重新授权）

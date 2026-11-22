@@ -208,7 +208,7 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="sticky left-0 z-10 flex w-52 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+    <aside className="sticky left-0 z-10 flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
       <nav className="flex-1 space-y-1 p-3">
         {nav.map((item) => {
           const Icon = item.icon;
@@ -231,10 +231,10 @@ export default function Sidebar({
         })}
       </nav>
       {/* 应用切换 Tab（位于左下角工具图标行上方；显示项由系统设置「应用显示」控制） */}
-      <div className="border-t border-slate-200 p-3 dark:border-zinc-800">
-        {/* flex-wrap 按内容自然宽度排布（原 4 等列栅格装不下 OfficeAce/LobsterAI 这类
-            9 字符英文 Tab 名，会横向溢出互相压字）；min-w 对齐短名按钮的视觉宽度 */}
-        <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
+      <div className="border-t border-slate-200 p-2 dark:border-zinc-800">
+        {/* 固定 3 列栅格（用户口径：一行 3 个、列列对齐；w-56 加宽后 9 字符英文
+            Tab 名在等宽格内不溢出）；最后一行不足 3 个时按列对齐留空位 */}
+        <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1 dark:bg-zinc-900">
           {visibleTabs.map((tab) => {
             // 自定义图标优先（系统设置「应用图标」），非法/缺失回退 APP_TABS 内置图标
             const TabIcon = resolveAppIcon(settings?.app_icons?.[tab.key]) ?? tab.icon;
@@ -246,7 +246,7 @@ export default function Sidebar({
                 onClick={() => setActiveApp(tab.key)}
                 title={tab.title ?? tab.label}
                 className={cn(
-                  'flex min-w-[46px] flex-col items-center gap-0.5 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition active:scale-[0.97]',
+                  'flex w-full flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[11px] font-medium transition active:scale-[0.97]',
                   tab.disabled && 'cursor-not-allowed opacity-40',
                   active
                     ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100'
@@ -254,7 +254,7 @@ export default function Sidebar({
                 )}
               >
                 <TabIcon size={15} />
-                {tab.label}
+                <span className="w-full truncate text-center">{tab.label}</span>
               </button>
             );
           })}

@@ -2,9 +2,12 @@
 //!
 //! 协议（VENU-5 §2.5 定稿，CodeArts2API 实测交叉验证；旧 3.9.3 行为基准对齐）：
 //! 1. `GET  /v1/ops/delivery?channel=IDE` → 信封 `{code:0, data:{items:[...]}}`；
-//!    只领 `claimable==true` 且触发模式为 MANUAL_CLAIM（或未声明）的活动
-//!    （**绝不伪造触发事件**——TRIGGER_EVENT 事件类活动不自动领取，服务端拒绝直接
-//!    领取；未声明 triggerMode 的可领项交服务器仲裁，拒绝则如实落库为 noop）。
+//!    只领 `claimable==true` 且 **type=USER_LOGIN** 且触发模式为 MANUAL_CLAIM（或
+//!    未声明）的活动（**绝不伪造触发事件**——TRIGGER_EVENT 事件类活动不自动领取，
+//!    服务端拒绝直接领取；未声明 triggerMode 的 USER_LOGIN 可领项交服务器仲裁，
+//!    拒绝则如实落库为 noop）。非 USER_LOGIN 类型显式排除代领（VENU-42 复核口径）：
+//!    STUDENT_CERTIFIED（学生认证）/ NEW_USER_REGISTER 只展示不领取——认证状态由
+//!    官方端核验，issue 原口径「仅当旧版已代领时应用侧才代领」，旧落库行无记录。
 //!    VENU-42：旧 3.9.3 的解析面与本构建一致（exe 串 `claimable/extra/triggerMode`、
 //!    单 MANUAL_CLAIM 字面量、channel=IDE），且旧版日实领 Skill 大赛 1000 CREDIT
 //!    （11-17/11-18 落库行）——「重建后只领 100」主因是凭证失效而非过滤器；
@@ -78,11 +81,21 @@ fn pool_entries(st: &AppState, user_ids: &[String]) -> Result<Vec<PoolEntry>, St
     Ok(out)
 }
 
-/// delivery 单项是否可自动领取（VENU-42 放宽）：`claimable==true` 且触发模式为
-/// MANUAL_CLAIM 或未声明（extra/triggerMode 缺失、空串——活动面结构漂移防御）。
-/// TRIGGER_EVENT 明确排除：事件类活动需真实触发，本端绝不伪造事件；
-/// 未声明 triggerMode 的可领项交服务器仲裁（服务端拒绝触发类直领，返回归 noop）。
+/// delivery 单项是否可自动领取（VENU-42 复核修复版）：`claimable==true` 且
+/// **type=USER_LOGIN** 且触发模式为 MANUAL_CLAIM 或未声明（extra/triggerMode 缺失、
+/// 空串——活动面结构漂移防御）。
+/// 非 USER_LOGIN 类型显式排除代领（复核口径，不靠 claimable 单一条件）：
+/// `STUDENT_CERTIFIED`（学生认证——一次性认证奖励，认证状态由官方端核验，本端
+/// 代领等于替用户确认未核验状态；issue 原口径「仅当旧版已代领时应用侧才代领」，
+/// 旧落库行无 STUDENT_CERTIFIED 记录）与 `NEW_USER_REGISTER`（AUTO_GRANT 一次性）
+/// 只展示不领取；`TRIGGER_EVENT` 明确排除：事件类活动需真实触发，本端绝不伪造事件；
+/// 未声明 triggerMode 的 USER_LOGIN 可领项交服务器仲裁（拒绝返回归 noop）。
+/// 类型缺失/未知同样不领取（宁漏不越权，标题经如实枚举可见）。
 fn claimable_manual(item: &Value) -> bool {
+    match item.get("type").and_then(Value::as_str) {
+        Some(t) if t.eq_ignore_ascii_case("USER_LOGIN") => {}
+        _ => return false,
+    }
     if !item.get("claimable").and_then(Value::as_bool).unwrap_or(false) {
         return false;
     }
@@ -117,9 +130,9 @@ fn event_gated_titles(items: &[Value]) -> Vec<String> {
 /// delivery 全量活动的如实枚举（VENU-42：每个渠道的领取结果对用户可见）。
 /// 只归类不可自动领取项（可自动领取项走 claim 路径，逐项如实落库）：
 /// `status==CONFIRMED/CLAIMED` → 已领取/已发放；`triggerMode==TRIGGER_EVENT` →
-/// 事件触发类（列标题，官方端完成）；其余 → 暂不可领（条件未满足，列标题——
-/// 2026-11-22 真机探针：学生认证 STUDENT_CERTIFIED 渠道 claimable=false 且无 status，
-/// 属此桶，标题必须可见）。
+/// 事件触发类（列标题，官方端完成）；其余 → 暂不可领（需官方端完成对应条件，列标题
+/// ——学生认证 STUDENT_CERTIFIED 渠道无论 claimable 与否都落此桶（类型被排除代领），
+/// 标题必须可见，复核口径「展示 + 引导」）。
 fn delivery_enumeration(items: &[Value]) -> String {
     let mut confirmed = 0usize;
     let mut gated: Vec<String> = Vec::new();
@@ -164,7 +177,7 @@ fn delivery_enumeration(items: &[Value]) -> String {
     }
     if !other.is_empty() {
         parts.push(format!(
-            "暂不可领（条件未满足）{}（{}）",
+            "暂不可领（需官方端完成对应条件）{}（{}）",
             other.len(),
             other.join("、")
         ));
@@ -614,28 +627,58 @@ mod tests {
         assert!(claimable_manual(&item));
         // 事件类（TRIGGER_EVENT）不可自动领取——绝不伪造触发事件（VENU-42 金测）
         let event_item = json!({
-            "campaignId": 2, "claimable": true,
+            "campaignId": 2, "type": "USER_LOGIN", "claimable": true,
             "extra": { "triggerMode": "TRIGGER_EVENT" }
         });
         assert!(!claimable_manual(&event_item));
         // 不可领状态
         let not_claimable = json!({
-            "campaignId": 3, "claimable": false,
+            "campaignId": 3, "type": "USER_LOGIN", "claimable": false,
             "extra": { "triggerMode": "MANUAL_CLAIM" }
         });
         assert!(!claimable_manual(&not_claimable));
         // 字段缺失不 panic（claimable 缺失 → 不可领）
         assert!(!claimable_manual(&json!({})));
         // VENU-42 放宽：triggerMode 未声明（extra 整体缺失 / triggerMode 缺失 / 空串）
-        // 的可领项交服务器仲裁，不再因结构漂移被静默过滤
-        assert!(claimable_manual(&json!({ "claimable": true })));
-        assert!(claimable_manual(&json!({ "claimable": true, "extra": {} })));
+        // 的 USER_LOGIN 可领项交服务器仲裁，不再因结构漂移被静默过滤
+        assert!(claimable_manual(&json!({ "type": "USER_LOGIN", "claimable": true })));
         assert!(claimable_manual(&json!({
-            "claimable": true, "extra": { "triggerMode": "" }
+            "type": "USER_LOGIN", "claimable": true, "extra": {}
         })));
-        // 小写形态同旧基线：大小写不敏感
         assert!(claimable_manual(&json!({
-            "claimable": true, "extra": { "triggerMode": "manual_claim" }
+            "type": "USER_LOGIN", "claimable": true, "extra": { "triggerMode": "" }
+        })));
+        // 小写形态同旧基线：大小写不敏感（type 与 triggerMode 双向）
+        assert!(claimable_manual(&json!({
+            "type": "user_login", "claimable": true,
+            "extra": { "triggerMode": "manual_claim" }
+        })));
+        // 复核修复项 1 金测（VENU-42）：非 USER_LOGIN 类型显式排除代领，
+        // 不靠 claimable 单一条件——学生认证（STUDENT_CERTIFIED）即便转
+        // claimable=true + MANUAL_CLAIM 也绝不自动领取（认证状态由官方端核验，
+        // 旧落库行无代领记录；issue 原口径维持）
+        let student_claimable = json!({
+            "campaignId": 39, "title": "Student Certification: Claim 5000 Credits in 2026",
+            "type": "STUDENT_CERTIFIED", "claimable": true, "status": "ELIGIBLE",
+            "benefitAmount": 5000, "extra": { "triggerMode": "MANUAL_CLAIM" }
+        });
+        assert!(!claimable_manual(&student_claimable));
+        let student_lowercase = json!({
+            "campaignId": 2, "type": "student_certified", "claimable": true,
+            "extra": { "triggerMode": "MANUAL_CLAIM" }
+        });
+        assert!(!claimable_manual(&student_lowercase));
+        // NEW_USER_REGISTER（AUTO_GRANT 一次性）同理只展示
+        let new_user = json!({
+            "campaignId": 4, "type": "NEW_USER_REGISTER", "claimable": true,
+            "extra": { "triggerMode": "MANUAL_CLAIM" }
+        });
+        assert!(!claimable_manual(&new_user));
+        // 类型缺失/未知 → 不领取（宁漏不越权，标题经如实枚举可见）
+        assert!(!claimable_manual(&json!({ "claimable": true })));
+        assert!(!claimable_manual(&json!({
+            "type": "SOMETHING_ELSE", "claimable": true,
+            "extra": { "triggerMode": "MANUAL_CLAIM" }
         })));
     }
 
@@ -645,41 +688,52 @@ mod tests {
     #[test]
     fn delivery_enumeration_reports_skipped_channels() {
         let items = vec![
-            // 可自动领取（走 claim 路径，不在枚举内）
+            // 可自动领取（USER_LOGIN，走 claim 路径，不在枚举内）
             json!({
                 "campaignId": 1, "title": "Daily Check-in: Claim 100 Credits",
-                "claimable": true, "status": "ELIGIBLE", "benefitAmount": 100,
+                "type": "USER_LOGIN", "claimable": true, "status": "ELIGIBLE",
+                "benefitAmount": 100,
                 "extra": { "triggerMode": "MANUAL_CLAIM" }
             }),
             // 已领取（客户端/历史轮 CONFIRMED）
             json!({
                 "campaignId": 2, "title": "Daily Check-in Reward for Skill Innovation Challenge",
-                "claimable": false, "status": "CONFIRMED", "benefitAmount": 1000,
+                "type": "USER_LOGIN", "claimable": false, "status": "CONFIRMED",
+                "benefitAmount": 1000,
+                "extra": { "triggerMode": "MANUAL_CLAIM" }
+            }),
+            // 学生认证（STUDENT_CERTIFIED）**已认证转可领**（claimable=true）仍不代领
+            // （复核修复项 1）——归「暂不可领（需官方端完成对应条件）」桶，标题可见
+            json!({
+                "campaignId": 39, "title": "Student Certification: Claim 5000 Credits in 2026",
+                "type": "STUDENT_CERTIFIED", "claimable": true, "status": "ELIGIBLE",
+                "benefitAmount": 5000,
                 "extra": { "triggerMode": "MANUAL_CLAIM" }
             }),
             // 事件触发类（本端不自动领取，标题如实上报）
             json!({
                 "campaignId": 3, "title": "学生认证奖励",
-                "claimable": true, "status": "ELIGIBLE", "benefitAmount": 200,
+                "type": "USER_LOGIN", "claimable": true, "status": "ELIGIBLE",
+                "benefitAmount": 200,
                 "extra": { "triggerMode": "TRIGGER_EVENT" }
             }),
             // 事件触发类但不可领（未完成事件）
             json!({
                 "campaignId": 4, "title": "Skill 大赛事件奖励",
-                "claimable": false, "status": "IN_PROGRESS",
+                "type": "USER_LOGIN", "claimable": false, "status": "IN_PROGRESS",
                 "extra": { "triggerMode": "TRIGGER_EVENT" }
             }),
-            // 其余未开放
+            // 其余未开放（类型缺失同样不领取）
             json!({
                 "campaignId": 5, "title": "其他活动", "claimable": false, "status": "ELIGIBLE",
             }),
         ];
         let gated = event_gated_titles(&items);
-        // 可领取的事件类才计入「领取路径跳过」清单（post-loop note 用）
+        // 可领取的 USER_LOGIN 事件类才计入「领取路径跳过」清单（post-loop note 用）
         assert_eq!(gated, vec!["学生认证奖励".to_string()]);
         let enumeration = delivery_enumeration(&items);
         // 枚举更宽：所有 TRIGGER_EVENT 渠道（含不可领）都列标题，渠道可见性优先
-        assert!(enumeration.contains("delivery 共 5 个活动"), "{enumeration}");
+        assert!(enumeration.contains("delivery 共 6 个活动"), "{enumeration}");
         assert!(enumeration.contains("已领取/已发放 1"), "{enumeration}");
         assert!(
             enumeration.contains(
@@ -688,13 +742,20 @@ mod tests {
             "{enumeration}"
         );
         assert!(
-            enumeration.contains("暂不可领（条件未满足）1（其他活动）"),
+            enumeration.contains(
+                "暂不可领（需官方端完成对应条件）2（Student Certification: Claim 5000 Credits in 2026、其他活动）"
+            ),
             "{enumeration}"
         );
+        // 复核修复项 1 断言：学生认证渠道即便 claimable=true 也绝不进入领取集合，
+        // 只在枚举中如实展示（标题 + 需官方端完成条件）
+        assert!(!claimable_manual(&items[2]));
         let noop = noop_delivery_message(&items);
-        assert!(noop.starts_with("无可自动领取的活动；delivery 共 5 个活动"), "{noop}");
-        // 全部可领时枚举只剩总数
-        let all_claimable = vec![json!({ "campaignId": 9, "claimable": true })];
+        assert!(noop.starts_with("无可自动领取的活动；delivery 共 6 个活动"), "{noop}");
+        // 全部可领时枚举只剩总数（USER_LOGIN 可领项不进枚举）
+        let all_claimable = vec![json!({
+            "campaignId": 9, "type": "USER_LOGIN", "claimable": true
+        })];
         assert_eq!(delivery_enumeration(&all_claimable), "delivery 共 1 个活动");
     }
 

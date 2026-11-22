@@ -1,4 +1,4 @@
-# AGENT.md — AI Work 助手 (ai-work-assistant) v3.9.8
+# AGENT.md — AI Work 助手 (ai-work-assistant) v3.9.9
 
 > 项目级别速查手册。给后续会话（人或 AI）秒接上下文用。任何会改契约的提交请同步更新本文档。
 > 注：品牌已由 Trae Work Assistant 迁移为 **AI Work 助手（ai-work-assistant）**，本机仓库目录暂为 `trae-work-assistant`，后续可整体重命名。
@@ -84,7 +84,7 @@ ai-work-assistant/
 │           ├── minimax_credits.rs # MiniMax 积分（get_membership_info free/purchased 拆分 + 快照落库）
 │           ├── codearts_common.rs # CodeArts 共享层（SDK-HMAC-SHA256 签名器金测 / STS 凭证与刷新熔断 / state.vscdb 只读导入 / caller-identity）
 │           ├── codearts_oauth.rs  # CodeArts 浏览器 OAuth 通道协议（PKCE + DPoP ES256 + 授权码/refresh 换票）
-│           ├── codearts_checkin.rs # CodeArts 每日签到（delivery→claim，只领 claimable+MANUAL_CLAIM/未声明 triggerMode；TRIGGER_EVENT 不自动领取但标题如实呈现；业务码 0/40001/4006/4004/4003 分类；多账号；含只读 dump_delivery 探针）
+│           ├── codearts_checkin.rs # CodeArts 每日签到（delivery→claim，只领 claimable+USER_LOGIN 类型+MANUAL_CLAIM/未声明 triggerMode；TRIGGER_EVENT 与学生认证等非 USER_LOGIN 类型不自动领取但标题如实呈现；业务码 0/40001/4006/4004/4003 分类；多账号；含只读 dump_delivery 探针）
 │           ├── codearts_credits.rs # CodeArts 积分（statistics/plugin 归一 + 快照落库；usageTotalPackageCredit 缺失报因不冒充 0）
 │           ├── officeace_checkin.rs # OfficeAce（果办）签到/只读积分（本机 storage.sqlite + Windows 凭据管理器 provider-state 登录态，临时 AK/SK 约 2h；V11-HMAC-SHA256 签名）
 │           ├── lobsterai_checkin.rs # LobsterAI（龙虾）签到/只读积分（本机 lobsterai.sqlite 登录态；slot→context→check_in→复核）
@@ -231,7 +231,7 @@ ai-work-assistant/
 | CodeArts | `codearts_account_import_manual(accessKey, secretKey, securityToken?, expiresAtMs?)` | 手工 IAM AK/SK 导入（通道 C；旧 3.9.3 同名命令同参数；AK/SK 均不能为空，expiresAtMs 0 = 永久不过期） |
 | CodeArts | `codearts_oauth_start() / _poll() / _cancel() / _complete_url(url)` | 浏览器 OAuth（通道 B；授权码 + PKCE S256 + DPoP ES256，client `codearts-agent`，本机回环回调随机端口 ≥10000 + 5 分钟空闲收口；start 返回授权链接，poll 单步轮询，回调未自动返回时粘贴最终地址兜底；独立授权链可自动刷新，不影响桌面端登录。端到端需真人浏览器授权——协议有单测，属「未实测」项） |
 | CodeArts | `codearts_credential_status(id)` | 凭证就绪预检（不发网络）：usable / expires_at_ms / credential_source / refreshable |
-| CodeArts | `codearts_checkin_start(userIds?) → NDJSON codearts-checkin-progress` | Rust 直调 `tasks/codearts_checkin.rs::run_checkin_round`（`GET /v1/ops/delivery?channel=IDE` → 只领 `claimable` 且触发模式为 `MANUAL_CLAIM` 或**未声明**（VENU-42 放宽：结构漂移防御，未声明项交服务器仲裁；`TRIGGER_EVENT` 事件类绝不自动领取——不伪造触发事件，但标题如实呈现在签到消息）→ `POST /v1/ops/claim {campaignId, idempotentKey:<uuid>, channel:"IDE"}`（ops 端点身份头额外 `Agent-Type: PromptCenter`）；业务码 0 成功 / 40001 今日已领 / 4006 名额用完（均幂等中性）/ 4004 过期 / 4003 禁用熔断；401 与 `APIG.0301/0303/0602` 归 needs_relogin；金额读 benefitAmount 禁止硬编码；无活动/无可领转中性 noop 并**如实枚举** delivery 全量活动（已领取/事件触发类标题/未开放）；多账号间隔 codearts_checkin_gap_secs 默认 3s。SDK-HMAC-SHA256 签名：CanonicalURI 强制尾斜杠 + SignedHeaders 前空行 + `Authorization: SDK-HMAC-SHA256 Access=<AK>` 形态（Credential= AWS 风格形态恒 0301，真机探针证明），全部请求头 + host 参与签名） |
+| CodeArts | `codearts_checkin_start(userIds?) → NDJSON codearts-checkin-progress` | Rust 直调 `tasks/codearts_checkin.rs::run_checkin_round`（`GET /v1/ops/delivery?channel=IDE` → 只领 `claimable` 且 **type=USER_LOGIN** 且触发模式为 `MANUAL_CLAIM` 或**未声明**（VENU-42 放宽：结构漂移防御，未声明项交服务器仲裁；非 USER_LOGIN 类型显式排除代领——`STUDENT_CERTIFIED` 学生认证/`NEW_USER_REGISTER` 只展示不领取（复核口径：认证状态由官方端核验，仅当旧版已代领时才代领，旧落库行无记录）；`TRIGGER_EVENT` 事件类绝不自动领取——不伪造触发事件，但标题如实呈现在签到消息）→ `POST /v1/ops/claim {campaignId, idempotentKey:<uuid>, channel:"IDE"}`（ops 端点身份头额外 `Agent-Type: PromptCenter`）；业务码 0 成功 / 40001 今日已领 / 4006 名额用完（均幂等中性）/ 4004 过期 / 4003 禁用熔断；401 与 `APIG.0301/0303/0602` 归 needs_relogin；金额读 benefitAmount 禁止硬编码；无活动/无可领转中性 noop 并**如实枚举** delivery 全量活动（已领取/事件触发类标题/暂不可领-需官方端完成对应条件含标题）；多账号间隔 codearts_checkin_gap_secs 默认 3s。SDK-HMAC-SHA256 签名：CanonicalURI 强制尾斜杠 + SignedHeaders 前空行 + `Authorization: SDK-HMAC-SHA256 Access=<AK>` 形态（Credential= AWS 风格形态恒 0301，真机探针证明），全部请求头 + host 参与签名） |
 | CodeArts | `codearts_checkin_results(days?)` | 签到日志（codearts_checkin_results 表 90 天滚动，pk=date\|user_id\|time_ms） |
 | CodeArts | `codearts_credits_fetch()` / `codearts_credits_history(days?)` | 全账号实时积分（`GET /snap-manager/v1/statistics/plugin` 普通身份头无 Agent-Type；只读统计不消耗积分）：usageTotalPackageCredit 缺失 = 无积分套餐报因不用 0 冒充；余额/已用/即将到期/赠送（usageBonusPackageCredit）拆分 + package_name + end_date；成功回写池缓存键 + 当日快照覆盖落库（365 天滚动） |
 | CodeArts | 调度：`codearts-checkin`（默认 00:20，settings.codearts_checkin_enabled/hhmm 可改）+ `codearts-credits-sync`（credits 四模式，默认 **daily 23:58**——旧 3.9.3 基准：当日领取积分当日有效，23:58 快照捕捉当日末态） | 应用内调度器任务（CLI `--task-run codearts-checkin / codearts-credits-sync` 同款实现；跨进程轮次锁 "codearts"/"round"；空池奖励型豁免 skipped_empty_pool，needs_relogin 失败剔除重试判定；活动官方截止 2026-12-31 后转 noop 常态不报错刷屏）。诊断：CLI `--task-run codearts-delivery-dump` = 只读 delivery 全量活动探针（VENU-42；不 claim、不改池，输出脱敏活动清单供与旧版实领对照） |

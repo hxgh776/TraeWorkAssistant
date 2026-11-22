@@ -6,6 +6,14 @@
 
 ---
 
+## [3.9.11] · 2026-11-22 · CodeArts 领取结果枚举全路径可见 + 页面口径/展示修复（VENU-42 复验修复 R1/R2/R3）
+
+### 修复
+
+- **非 noop 分支补全量枚举（F1，功能）**：签到轮消息统一由 `compose_round_message` 组装——success / already / fail 聚合、禁用熔断、claim 期凭证熔断全部追加 delivery 全量枚举；此前仅「无可自动领取」分支展示枚举，正常领取日学生认证（STUDENT_CERTIFIED）等被跳过渠道标题在界面不可见。删除领取轮单独追加的事件类段落（并入枚举事件触发类桶，杜绝重复出现）；`event_gated_titles` 收进 `#[cfg(test)]`（生产路径无调用点，零新增 warning）。
+- **每日签到页领取语义文案更新（F2，文案）**：从「只领 claimable 且 MANUAL_CLAIM 的活动」更新为与实码一致的 USER_LOGIN 白名单口径（MANUAL_CLAIM/未声明交服务端仲裁；学生认证、注册奖励与事件触发类只展示不代领；noop 如实枚举全量活动）。
+- **签到记录表消息不再截断（F3，展示）**：`truncate` → `whitespace-pre-wrap break-all`（保留悬停 title），枚举全量文本在记录表完整可见。
+
 ## [3.9.10] · 2026-11-22 · MiniMax「需重新授权」口径收口：概述与签到页一致 + authjson 可自愈（VENU-41 F1）
 
 ### 修复

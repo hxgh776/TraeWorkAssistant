@@ -106,7 +106,9 @@ fn claimable_manual(item: &Value) -> bool {
 }
 
 /// delivery 中「事件触发类、本端不自动领取」的活动标题（claimable 且
-/// TRIGGER_EVENT）。VENU-42：如实上报标题，Skill 大赛/学生认证等渠道对用户可见。
+/// TRIGGER_EVENT）。VENU-42 复验后仅金测使用——生产路径由 delivery_enumeration
+/// 的事件触发类桶承担（R1：领取轮不再单独追加事件类段落，避免重复）。
+#[cfg(test)]
 fn event_gated_titles(items: &[Value]) -> Vec<String> {
     items
         .iter()
@@ -190,6 +192,23 @@ fn delivery_enumeration(items: &[Value]) -> String {
 /// 改为基线短语 + delivery 全量枚举，被跳过的渠道标题可见。
 fn noop_delivery_message(items: &[Value]) -> String {
     format!("无可自动领取的活动；{}", delivery_enumeration(items))
+}
+
+/// 签到轮消息统一组装（VENU-42 F1 复验修复）：success / already / fail 聚合、
+/// 禁用熔断、claim 期凭证熔断共用——非 noop 分支同样追加 delivery 全量枚举，
+/// 保证「真正赚积分的路径」上学生认证/Skill 大赛等被跳过渠道的标题依旧可见。
+/// 事件触发类桶已并入枚举（不再单独追加段落，避免重复）；items 为空（凭证/
+/// 网络在 delivery 之前就失败）时只拼 parts，不追加枚举。
+fn compose_round_message(status: &str, ok: usize, parts: &[String], items: &[Value]) -> String {
+    let mut message = if status == "success" {
+        format!("领取成功 {ok} 项：{}", parts.join("；"))
+    } else {
+        parts.join("；")
+    };
+    if !items.is_empty() {
+        message = format!("{message}；{}", delivery_enumeration(items));
+    }
+    message
 }
 
 /// claim 业务码 → (归类, 展示) 归类：success / already / noop / fail / disabled
@@ -277,8 +296,6 @@ fn checkin_one(st: &AppState, account: &Value) -> (String, String, Option<f64>, 
     }
     let claimable_items: Vec<&Value> =
         items.iter().filter(|item| claimable_manual(item)).collect();
-    // 事件触发类标题先行提取（VENU-42：无论本轮是否领到，跳过的渠道如实可见）
-    let event_gated = event_gated_titles(&items);
     if claimable_items.is_empty() {
         return (
             "noop".into(),
@@ -306,11 +323,13 @@ fn checkin_one(st: &AppState, account: &Value) -> (String, String, Option<f64>, 
             snap_request("POST", "/v1/ops/claim", &[], Some(&body), &cred, true);
         if c_status != 200 || classify_needs_relogin(c_status, &c_raw) {
             if classify_needs_relogin(c_status, &c_raw) {
+                // 凭证失效熔断（claim 期）：消息走统一组装——已领明细 + 全量枚举不丢
+                parts.push(format!(
+                    "凭证失效（HTTP {c_status}，APIG.0301/0303/0602 归凭证失效），请重新导入本机登录态或更新 AK/SK"
+                ));
                 return (
                     "fail".into(),
-                    format!(
-                        "凭证失效（HTTP {c_status}，APIG.0301/0303/0602 归凭证失效），请重新导入本机登录态或更新 AK/SK"
-                    ),
+                    compose_round_message("fail", ok, &parts, &items),
                     None,
                     None,
                     Some("needs_relogin".into()),
@@ -352,16 +371,17 @@ fn checkin_one(st: &AppState, account: &Value) -> (String, String, Option<f64>, 
             }
         }
     }
-    // VENU-42：事件触发类活动不自动领取（绝不伪造事件），但标题如实呈现
-    if !event_gated.is_empty() {
-        parts.push(format!(
-            "事件触发类活动需真实触发，已跳过（官方端完成）：{}",
-            event_gated.join("、")
-        ));
-    }
     // ③ 聚合（禁用熔断优先；部分成功按 success 记账 + 明细呈现）
-    if let Some(reason) = disabled_reason {
-        return ("fail".into(), reason, None, None, Some("needs_relogin".into()));
+    if disabled_reason.is_some() {
+        // 禁用熔断：消息走统一组装——parts 已含逐项明细（含「账号被禁用」行），
+        // 追加全量枚举不丢被跳过渠道
+        return (
+            "fail".into(),
+            compose_round_message("fail", ok, &parts, &items),
+            None,
+            None,
+            Some("needs_relogin".into()),
+        );
     }
     let status = if ok > 0 {
         "success"
@@ -372,11 +392,9 @@ fn checkin_one(st: &AppState, account: &Value) -> (String, String, Option<f64>, 
     } else {
         "noop"
     };
-    let message = if status == "success" {
-        format!("领取成功 {} 项：{}", ok, parts.join("；"))
-    } else {
-        parts.join("；")
-    };
+    // VENU-42 F1 复验修复：非 noop 分支同样追加全量枚举——学生认证/Skill 大赛等
+    // 被跳过渠道的标题在「真正赚积分的路径」上也可见（F1：之前只在 noop 早退有）
+    let message = compose_round_message(&status, ok, &parts, &items);
     let campaigns_json = if campaigns.is_empty() {
         None
     } else {
@@ -757,6 +775,56 @@ mod tests {
             "campaignId": 9, "type": "USER_LOGIN", "claimable": true
         })];
         assert_eq!(delivery_enumeration(&all_claimable), "delivery 共 1 个活动");
+    }
+
+    /// VENU-42 F1/R1 金测：存在可领活动（真正赚积分的路径）时，success 消息仍保留
+    /// 被跳过渠道的全量枚举——学生认证标题可见、事件触发类整条恰好出现一次
+    /// （compose_round_message 统一组装后不再单独追加事件类段落，杜绝重复）。
+    #[test]
+    fn round_message_keeps_skipped_channels_when_claimable_exists() {
+        let items = vec![
+            // ① USER_LOGIN 可领（走 claim，success）
+            json!({
+                "campaignId": 34, "title": "Daily Check-in: Claim 100 Credits",
+                "type": "USER_LOGIN", "claimable": true, "status": "ELIGIBLE",
+                "benefitAmount": 100,
+                "extra": { "triggerMode": "MANUAL_CLAIM" }
+            }),
+            // ② 学生认证（STUDENT_CERTIFIED，claimable=false，条件未满足）——枚举可见
+            json!({
+                "campaignId": 39, "title": "Student Certification: Claim 5000 Credits in 2026",
+                "type": "STUDENT_CERTIFIED", "claimable": false, "status": "ELIGIBLE",
+                "benefitAmount": 5000,
+                "extra": { "triggerMode": "MANUAL_CLAIM" }
+            }),
+            // ③ 事件触发类（不自动领取，枚举事件触发类桶列标题）
+            json!({
+                "campaignId": 3, "title": "邀请好友事件奖励",
+                "type": "USER_LOGIN", "claimable": true, "status": "ELIGIBLE",
+                "benefitAmount": 200,
+                "extra": { "triggerMode": "TRIGGER_EVENT" }
+            }),
+        ];
+        let parts = vec!["Daily Check-in: Claim 100 Credits：+100 积分".to_string()];
+        let message = compose_round_message("success", 1, &parts, &items);
+        assert!(message.starts_with("领取成功 1 项："), "{message}");
+        assert!(message.contains("Daily Check-in: Claim 100 Credits：+100 积分"), "{message}");
+        assert!(message.contains("暂不可领（需官方端完成对应条件）"), "{message}");
+        assert!(message.contains("Student Certification"), "{message}");
+        // 事件触发类整条恰好出现一次（删除单独追加段落后由枚举桶唯一承担）
+        assert_eq!(message.matches("事件触发类").count(), 1, "{message}");
+        assert!(message.contains("事件触发类 1 个需在官方端完成（邀请好友事件奖励）"), "{message}");
+        // 对照：already / fail 聚合同样带全量枚举（F1 的两条常规路径）
+        let already_parts = vec!["Daily Check-in: Claim 100 Credits：今日已领取".to_string()];
+        let already_message = compose_round_message("already", 0, &already_parts, &items);
+        assert!(already_message.contains("今日已领取"), "{already_message}");
+        assert!(already_message.contains("Student Certification"), "{already_message}");
+        assert_eq!(already_message.matches("事件触发类").count(), 1, "{already_message}");
+        // 对照：items 为空（凭证/网络早于 delivery 失败）只拼 parts，不追加枚举
+        assert_eq!(
+            compose_round_message("fail", 0, &["凭证已失效".to_string()], &[]),
+            "凭证已失效"
+        );
     }
 
     #[test]

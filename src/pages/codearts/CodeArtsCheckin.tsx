@@ -216,8 +216,9 @@ export default function CodeArtsCheckin() {
           <div className="rounded-lg border border-slate-100 p-3 text-sm dark:border-zinc-800">
             <div className="font-medium">领取语义</div>
             <div className="mt-1 text-xs text-slate-400">
-              只领 claimable 且 MANUAL_CLAIM 的活动，绝不伪造触发事件；40001/4006 幂等归「已领取」；
-              4004/无活动转 noop「无可领取」不报错刷屏
+              只领类型 USER_LOGIN 且 claimable 的活动（triggerMode 为 MANUAL_CLAIM 或未声明，交服务端仲裁）；
+              学生认证、注册奖励与事件触发类只展示不代领，绝不伪造触发事件；
+              40001/4006 归「已领取」，4004/无活动转 noop 并如实枚举全量活动
             </div>
           </div>
           <div className="rounded-lg border border-slate-100 p-3 text-sm dark:border-zinc-800">
@@ -430,7 +431,7 @@ export default function CodeArtsCheckin() {
                       )}
                     </td>
                     <td className="max-w-[320px] px-3 py-1.5">
-                      <span className="block truncate text-xs text-slate-500 dark:text-zinc-400" title={r.message}>
+                      <span className="block whitespace-pre-wrap break-all text-xs text-slate-500 dark:text-zinc-400" title={r.message}>
                         {r.message || '—'}
                       </span>
                     </td>

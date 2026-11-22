@@ -13,6 +13,7 @@ import {
 import PageHeader from '../../components/PageHeader';
 import { StatCard, Badge, Spinner } from '../../components/ui';
 import { aggregateCheckinTrends } from '../../components/overviewTrendModel';
+import { isExpiredAccount } from './accountStatusModel';
 import { api } from '../../lib/tauri';
 import { useAppStore } from '../../store';
 import { useIsDark } from '../../lib/useIsDark';
@@ -69,8 +70,13 @@ export default function MiniMaxOverview() {
   const today = new Date().toISOString().slice(0, 10);
   const cnCount = accounts.filter((a) => a.region === 'minimax').length;
   const globalCount = accounts.filter((a) => a.region === 'minimax-global').length;
-  const needsRelogin = accounts.filter((a) => a.needs_relogin).length;
-  const needsReloginNames = accounts.filter((a) => a.needs_relogin).map((a) => a.name || a.user_id);
+  // F1 口径：与每日签到页 MiniTokenBadge 同判——needs_relogin 标记或 token 已过期均计入
+  //（此前只看 needs_relogin，token 已过期但未标记的账号概述显 0、签到页显红，两页矛盾）
+  const nowMs = Date.now();
+  const isExpired = (a: MinimaxAccountView) => isExpiredAccount(a, nowMs);
+  const needsRelogin = accounts.filter(isExpired).length;
+  const needsReloginNames = accounts.filter(isExpired).map((a) => a.name || a.user_id || '');
+  const todayFailCount = results.filter((r) => r.date === today && r.status === 'fail').length;
   const todayOk = results.filter((r) => r.date === today && r.status === 'success').length;
   const todayAlready = results.filter((r) => r.date === today && r.status === 'already').length;
   const todayTotal = accounts.length;
@@ -83,6 +89,20 @@ export default function MiniMaxOverview() {
   const creditsTotal = creditsKnown.reduce((s, a) => s + (a.credits_total ?? 0), 0);
 
   const trends = useMemo(() => aggregateCheckinTrends(results), [results]);
+
+  // 需重新授权卡（F1）：存在失效账号时整卡可点击直达「账号管理」重新授权
+  const alertCard = (
+    <StatCard
+      label="需重新授权"
+      value={loading ? '—' : needsRelogin}
+      hint={
+        needsRelogin > 0
+          ? `${needsReloginNames.slice(0, 3).join('、')}${needsReloginNames.length > 3 ? ` 等 ${needsReloginNames.length} 个账号` : ''}凭证失效，请到「账号管理」重新授权`
+          : `凭证链无失效账号${todayFailCount > 0 ? ` · 今日签到失败 ${todayFailCount} 条，详见每日签到` : ''}`
+      }
+      tone={needsRelogin > 0 ? 'red' : 'slate'}
+    />
+  );
 
   // 配置导航（步骤完成态实时判定）
   const steps: Step[] = [
@@ -167,16 +187,18 @@ export default function MiniMaxOverview() {
           hint="失败日内退避重试（环境配置可改）"
           tone={scheduled ? 'violet' : 'slate'}
         />
-        <StatCard
-          label="需重新授权"
-          value={loading ? '—' : needsRelogin}
-          hint={
-            needsRelogin > 0
-              ? `${needsReloginNames.slice(0, 3).join('、')} 等凭证失效，请到「账号管理」重新授权`
-              : '全部账号凭证链正常'
-          }
-          tone={needsRelogin > 0 ? 'red' : 'slate'}
-        />
+        {needsRelogin > 0 ? (
+          <button
+            type="button"
+            className="cursor-pointer text-left transition hover:opacity-90"
+            onClick={() => setView('minimax-accounts')}
+            title="到「账号管理」重新授权"
+          >
+            {alertCard}
+          </button>
+        ) : (
+          alertCard
+        )}
       </div>
 
       {/* 近 30 天签到结果（对齐 Qoder 概述：堆叠柱状按日汇总） */}

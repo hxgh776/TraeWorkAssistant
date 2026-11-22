@@ -588,8 +588,10 @@ impl TokenRec {
 static REFRESH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// 签到 / 积分共用的凭证就绪：返回可用 access_token。
-/// 路径：有效直用 → oauth_device 互斥刷新（成功立即落库）/ authjson 重读本机文件 →
-/// 失败标记 needs_relogin 熔断（后续调用直接 Err，不再打网络）。
+/// 路径：有效直用 → oauth_device 互斥刷新（成功立即落库）/ authjson 重读本机文件（自愈或熔断）。
+/// 熔断语义（VENU-41 F1 收口）：needs_relogin 短路仅适用于设备码链（invalid_grant 的链不可能
+/// 自愈）；authjson 链**不在调用入口短路**——本机 auth.json 可能已被 MiniMax Code 客户端续期，
+/// 必须先重读本机文件：重读到可用新链即清除熔断标记（自愈），仍过期才标记熔断并如实报错。
 pub fn ensure_fresh_token(st: &AppState, account: &Value) -> Result<TokenRec, String> {
     let id = account.get("id").and_then(Value::as_str).unwrap_or("").to_string();
     if id.is_empty() {
@@ -610,8 +612,11 @@ pub fn ensure_fresh_token(st: &AppState, account: &Value) -> Result<TokenRec, St
     {
         return Ok(rec);
     }
-    // 熔断：needs_relogin 已标记 → 直接失败（invalid_grant 的链不可能自愈）
-    if account.get("needs_relogin").and_then(Value::as_bool).unwrap_or(false) {
+    // 熔断短路：仅设备码链（needs_relogin 后不再打网络）。authjson 链跳过——见函数头说明，
+    // 本机客户端续期后必须给它一次重读自愈机会，否则标记即永久锁死（F1 反向风险）。
+    if rec.credential_source != "authjson"
+        && account.get("needs_relogin").and_then(Value::as_bool).unwrap_or(false)
+    {
         let reason = account
             .get("relogin_reason")
             .and_then(Value::as_str)
@@ -620,30 +625,64 @@ pub fn ensure_fresh_token(st: &AppState, account: &Value) -> Result<TokenRec, St
     }
     match rec.credential_source.as_str() {
         // 通道 B：只读导入——绝不主动刷新（refresh 一次性轮换会作废本机客户端链）。
-        // 过期时重读本机 auth.json 对齐客户端的最新轮换结果；仍过期则如实报错。
+        // 过期时重读本机 auth.json 对齐客户端的最新轮换结果：可用新链自愈，仍过期熔断。
         "authjson" => {
-            if let Some(latest) = read_local_authjson(region) {
-                if !latest.access_token.is_empty() && latest.access_token != rec.access_token {
-                    let fresh = TokenRec {
-                        access_token: latest.access_token,
-                        refresh_token: latest.refresh_token,
-                        expires_at_ms: latest.expires_at_ms,
-                        credential_source: "authjson".into(),
-                    };
-                    let usable = fresh.expires_at_ms == 0
-                        || fresh.expires_at_ms - EXPIRY_MARGIN_MS > chrono::Utc::now().timestamp_millis();
-                    // 客户端轮换过的新值：落我们的凭证表副本（不触碰 MiniMax 客户端文件）
-                    let _ = crate::store::docs::minimax_token_put(&db, &id, &fresh.to_json());
-                    if usable {
-                        return Ok(fresh);
-                    }
-                }
-            }
-            Err("本机登录态已过期：请打开 MiniMax Code 客户端（会自动续期）后重试，或改用设备码授权".into())
+            let latest = read_local_authjson(region).map(|l| TokenRec {
+                access_token: l.access_token,
+                refresh_token: l.refresh_token,
+                expires_at_ms: l.expires_at_ms,
+                credential_source: "authjson".into(),
+            });
+            authjson_heal_or_fail(
+                &db,
+                &id,
+                &rec,
+                chrono::Utc::now().timestamp_millis(),
+                latest,
+            )
         }
         // 通道 A：设备码流独立链——互斥刷新 + 成功无条件立即落库 + 失败熔断
         _ => refresh_and_persist(st, &id, region, &rec),
     }
+}
+
+/// authjson 链的「自愈或熔断」判定（与 ensure_fresh_token 拆分以便单测注入本机文件读取结果）：
+/// - 重读到与旧值不同的新 token：落凭证表副本（不触碰 MiniMax 客户端文件）；可用 → 清除
+///   needs_relogin 熔断（自愈）并返回 Ok；仍过期 → 标记熔断并 Err；
+/// - 重读失败 / 无轮换（同 token）→ 标记熔断并 Err。
+/// 两条 Err 路径都先 mark_needs_relogin（F1：不再只 Err 不标记，概述/账号页同步如实显示）。
+fn authjson_heal_or_fail(
+    db: &crate::store::Store,
+    id: &str,
+    rec: &TokenRec,
+    now_ms: i64,
+    latest: Option<TokenRec>,
+) -> Result<TokenRec, String> {
+    if let Some(latest) = latest {
+        if !latest.access_token.is_empty() && latest.access_token != rec.access_token {
+            let fresh = TokenRec {
+                access_token: latest.access_token,
+                refresh_token: latest.refresh_token,
+                expires_at_ms: latest.expires_at_ms,
+                credential_source: "authjson".into(),
+            };
+            let usable =
+                fresh.expires_at_ms == 0 || fresh.expires_at_ms - EXPIRY_MARGIN_MS > now_ms;
+            // 客户端轮换过的新值：落我们的凭证表副本（不触碰 MiniMax 客户端文件）
+            let _ = crate::store::docs::minimax_token_put(db, id, &fresh.to_json());
+            if usable {
+                // 自愈：曾因旧链失效标记的熔断，重读到可用新链即清除（本机客户端已续期可自愈）
+                if let Err(e) = clear_needs_relogin(db, id) {
+                    let _ = e; // 清除失败不改变返回（下轮重读仍会再试）
+                }
+                return Ok(fresh);
+            }
+        }
+    }
+    if let Err(e) = mark_needs_relogin(db, id, "本机登录态已过期") {
+        let _ = e; // 标记落库失败不影响本次 Err（下次调用重试标记）
+    }
+    Err("本机登录态已过期：请打开 MiniMax Code 客户端（会自动续期）后重试，或改用设备码授权".into())
 }
 
 /// OAuth 设备码 / 刷新协议共用：POST {account}/oauth2/token（refresh_token grant）。
@@ -683,6 +722,11 @@ fn refresh_and_persist(st: &AppState, id: &str, region: Region, rec: &TokenRec) 
         }
     }
     if rec.refresh_token.is_empty() {
+        // F1：无刷新链必败且不可自愈——标记熔断，概述/账号管理页同步如实显示需重新授权
+        // （此前只 Err 不标记，概述页「需重新授权」恒 0，与签到页失败互相矛盾）
+        if let Err(e) = mark_needs_relogin(&db, id, "无 refresh_token") {
+            crate::fs_utils::app_log(&st.data_dir, &format!("[minimax] 熔断标记落库失败：{e}"));
+        }
         return Err("无 refresh_token：请在账号管理重新授权".into());
     }
     let form = format!(
@@ -729,7 +773,7 @@ fn refresh_and_persist(st: &AppState, id: &str, region: Region, rec: &TokenRec) 
     Err(message)
 }
 
-/// 标记账号 needs_relogin（熔断；Clearable by 重新授权 / 移除重加）。
+/// 标记账号 needs_relogin（熔断；Clearable by 重新授权 / 移除重加 / authjson 自愈）。
 pub fn mark_needs_relogin(db: &crate::store::Store, id: &str, reason: &str) -> Result<(), String> {
     let mut pool = crate::store::docs::minimax_pool_load(db);
     let Some(accounts) = pool.get_mut("accounts").and_then(Value::as_array_mut) else {
@@ -742,6 +786,26 @@ pub fn mark_needs_relogin(db: &crate::store::Store, id: &str, reason: &str) -> R
             }
             acc["needs_relogin"] = json!(true);
             acc["relogin_reason"] = json!(reason);
+            return crate::store::docs::minimax_pool_save(db, &pool);
+        }
+    }
+    Ok(())
+}
+
+/// 清除账号 needs_relogin 熔断标记（authjson 链重读到可用新 token 时自愈调用；
+/// 幂等：未标记时为 no-op）。与 mark_needs_relogin 同池同语义。
+pub fn clear_needs_relogin(db: &crate::store::Store, id: &str) -> Result<(), String> {
+    let mut pool = crate::store::docs::minimax_pool_load(db);
+    let Some(accounts) = pool.get_mut("accounts").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for acc in accounts.iter_mut() {
+        if acc.get("id").and_then(Value::as_str) == Some(id) {
+            if !acc.get("needs_relogin").and_then(Value::as_bool).unwrap_or(false) {
+                return Ok(());
+            }
+            acc["needs_relogin"] = json!(false);
+            acc["relogin_reason"] = json!("");
             return crate::store::docs::minimax_pool_save(db, &pool);
         }
     }
@@ -986,5 +1050,168 @@ mod tests {
                 v.pointer("/base_resp/status_code")
             );
         }
+    }
+
+    // ── VENU-41 F1：needs_relogin 标记/自愈与 authjson 链收口 ──
+
+    /// F1 测试专用隔离目录（按用例名区分，避免同进程内互相覆盖）
+    fn f1_test_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("aiwork_minimax_f1_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// 双账号池（1 主测 + 1 对照），覆盖「1 失效 + 1 正常」混合态的隔离断言
+    fn f1_pool_with(id: &str, needs_relogin: bool, reason: &str) -> Value {
+        json!({ "accounts": [
+            { "id": id, "user_id": "u1", "name": "甲", "region": "minimax",
+              "needs_relogin": needs_relogin, "relogin_reason": reason },
+            { "id": "mm-other", "user_id": "u2", "name": "乙", "region": "minimax-global" }
+        ]})
+    }
+
+    #[test]
+    fn mark_needs_relogin_persists_and_is_idempotent() {
+        let dir = f1_test_dir("mark");
+        let db = crate::store::db(&dir);
+        crate::store::docs::minimax_pool_save(&db, &f1_pool_with("mm-1", false, "")).unwrap();
+        mark_needs_relogin(&db, "mm-1", "无 refresh_token").unwrap();
+        let pool = crate::store::docs::minimax_pool_load(&db);
+        assert_eq!(pool.pointer("/accounts/0/needs_relogin"), Some(&json!(true)));
+        assert_eq!(pool.pointer("/accounts/0/relogin_reason"), Some(&json!("无 refresh_token")));
+        // 幂等：已标记时二次标记不覆盖首个原因
+        mark_needs_relogin(&db, "mm-1", "本机登录态已过期").unwrap();
+        let pool = crate::store::docs::minimax_pool_load(&db);
+        assert_eq!(pool.pointer("/accounts/0/relogin_reason"), Some(&json!("无 refresh_token")));
+        // 对照账号不受影响（混合态隔离）
+        assert_ne!(pool.pointer("/accounts/1/needs_relogin"), Some(&json!(true)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clear_needs_relogin_heals_marked_account() {
+        let dir = f1_test_dir("clear");
+        let db = crate::store::db(&dir);
+        crate::store::docs::minimax_pool_save(&db, &f1_pool_with("mm-1", true, "本机登录态已过期")).unwrap();
+        clear_needs_relogin(&db, "mm-1").unwrap();
+        let pool = crate::store::docs::minimax_pool_load(&db);
+        assert_eq!(pool.pointer("/accounts/0/needs_relogin"), Some(&json!(false)));
+        assert_eq!(pool.pointer("/accounts/0/relogin_reason"), Some(&json!("")));
+        // 幂等 no-op：未标记时再清除不报错
+        clear_needs_relogin(&db, "mm-1").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authjson_still_expired_marks_breaker() {
+        let dir = f1_test_dir("authjson_expire");
+        let db = crate::store::db(&dir);
+        crate::store::docs::minimax_pool_save(&db, &f1_pool_with("mm-1", false, "")).unwrap();
+        let now = 1_700_000_000_000_i64;
+        let rec = TokenRec {
+            access_token: "old-token".into(),
+            refresh_token: String::new(),
+            expires_at_ms: now - 1_000,
+            credential_source: "authjson".into(),
+        };
+        crate::store::docs::minimax_token_put(&db, "mm-1", &rec.to_json()).unwrap();
+        // 无本机文件可重读（latest=None）：Err + 熔断标记落池（F1：不再只 Err 不标记）
+        let msg = match authjson_heal_or_fail(&db, "mm-1", &rec, now, None) {
+            Err(m) => m,
+            Ok(_) => panic!("仍过期路径不得返回 Ok"),
+        };
+        assert!(msg.contains("本机登录态已过期"));
+        let pool = crate::store::docs::minimax_pool_load(&db);
+        assert_eq!(pool.pointer("/accounts/0/needs_relogin"), Some(&json!(true)));
+        assert_eq!(pool.pointer("/accounts/0/relogin_reason"), Some(&json!("本机登录态已过期")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authjson_same_token_still_expired_marks_breaker() {
+        let dir = f1_test_dir("authjson_same");
+        let db = crate::store::db(&dir);
+        crate::store::docs::minimax_pool_save(&db, &f1_pool_with("mm-1", false, "")).unwrap();
+        let now = 1_700_000_000_000_i64;
+        let rec = TokenRec {
+            access_token: "old-token".into(),
+            refresh_token: String::new(),
+            expires_at_ms: now - 1_000,
+            credential_source: "authjson".into(),
+        };
+        crate::store::docs::minimax_token_put(&db, "mm-1", &rec.to_json()).unwrap();
+        // 本机文件仍在但客户端未轮换（同 token，仍过期）：Err + 熔断标记
+        let latest = Some(TokenRec {
+            access_token: "old-token".into(),
+            refresh_token: String::new(),
+            expires_at_ms: now - 1_000,
+            credential_source: "authjson".into(),
+        });
+        let r = authjson_heal_or_fail(&db, "mm-1", &rec, now, latest);
+        assert!(r.is_err());
+        let pool = crate::store::docs::minimax_pool_load(&db);
+        assert_eq!(pool.pointer("/accounts/0/needs_relogin"), Some(&json!(true)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authjson_new_but_expired_token_marks_breaker_and_persists_copy() {
+        let dir = f1_test_dir("authjson_new_expired");
+        let db = crate::store::db(&dir);
+        crate::store::docs::minimax_pool_save(&db, &f1_pool_with("mm-1", false, "")).unwrap();
+        let now = 1_700_000_000_000_i64;
+        let rec = TokenRec {
+            access_token: "old-token".into(),
+            refresh_token: String::new(),
+            expires_at_ms: now - 1_000,
+            credential_source: "authjson".into(),
+        };
+        crate::store::docs::minimax_token_put(&db, "mm-1", &rec.to_json()).unwrap();
+        // 客户端轮换过但新值仍过期：Err + 熔断标记；新值副本已落凭证表（对齐既有落库口径）
+        let latest = Some(TokenRec {
+            access_token: "new-token".into(),
+            refresh_token: "rt-new".into(),
+            expires_at_ms: now - 500,
+            credential_source: "authjson".into(),
+        });
+        let r = authjson_heal_or_fail(&db, "mm-1", &rec, now, latest);
+        assert!(r.is_err());
+        let pool = crate::store::docs::minimax_pool_load(&db);
+        assert_eq!(pool.pointer("/accounts/0/needs_relogin"), Some(&json!(true)));
+        let stored = crate::store::docs::minimax_token_get(&db, "mm-1").unwrap();
+        assert_eq!(stored.get("access_token"), Some(&json!("new-token")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn authjson_new_usable_token_heals_and_clears_breaker() {
+        let dir = f1_test_dir("authjson_heal");
+        let db = crate::store::db(&dir);
+        // 预置：账号已被熔断标记（此前只 Err 不标记 / 旧链失效所致）
+        crate::store::docs::minimax_pool_save(&db, &f1_pool_with("mm-1", true, "本机登录态已过期")).unwrap();
+        let now = 1_700_000_000_000_i64;
+        let rec = TokenRec {
+            access_token: "old-token".into(),
+            refresh_token: String::new(),
+            expires_at_ms: now - 1_000,
+            credential_source: "authjson".into(),
+        };
+        crate::store::docs::minimax_token_put(&db, "mm-1", &rec.to_json()).unwrap();
+        // 本机客户端已续期（新 token 可用）：Ok + 熔断清除（自愈）+ 新链落库
+        let latest = Some(TokenRec {
+            access_token: "new-token".into(),
+            refresh_token: "rt-new".into(),
+            expires_at_ms: now + 3_600_000,
+            credential_source: "authjson".into(),
+        });
+        let r = authjson_heal_or_fail(&db, "mm-1", &rec, now, latest);
+        let fresh = r.expect("可用新链应自愈返回 Ok");
+        assert_eq!(fresh.access_token, "new-token");
+        let pool = crate::store::docs::minimax_pool_load(&db);
+        assert_eq!(pool.pointer("/accounts/0/needs_relogin"), Some(&json!(false)));
+        let stored = crate::store::docs::minimax_token_get(&db, "mm-1").unwrap();
+        assert_eq!(stored.get("access_token"), Some(&json!("new-token")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

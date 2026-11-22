@@ -2,8 +2,13 @@
 //!
 //! 协议（VENU-5 §2.5 定稿，CodeArts2API 实测交叉验证；旧 3.9.3 行为基准对齐）：
 //! 1. `GET  /v1/ops/delivery?channel=IDE` → 信封 `{code:0, data:{items:[...]}}`；
-//!    只领 `claimable==true && extra.triggerMode=="MANUAL_CLAIM"` 的活动
-//!    （**绝不伪造触发事件**——事件类活动服务端拒绝直接领取）。
+//!    只领 `claimable==true` 且触发模式为 MANUAL_CLAIM（或未声明）的活动
+//!    （**绝不伪造触发事件**——TRIGGER_EVENT 事件类活动不自动领取，服务端拒绝直接
+//!    领取；未声明 triggerMode 的可领项交服务器仲裁，拒绝则如实落库为 noop）。
+//!    VENU-42：旧 3.9.3 的解析面与本构建一致（exe 串 `claimable/extra/triggerMode`、
+//!    单 MANUAL_CLAIM 字面量、channel=IDE），且旧版日实领 Skill 大赛 1000 CREDIT
+//!    （11-17/11-18 落库行）——「重建后只领 100」主因是凭证失效而非过滤器；
+//!    放宽未声明 triggerMode 是对活动面结构漂移的防御，金测锁定语义。
 //! 2. `POST /v1/ops/claim` body `{campaignId, idempotentKey:<uuid>, channel:"IDE"}`
 //!    （身份头额外 `Agent-Type: PromptCenter`；idempotentKey 每次新 UUID，重复调用不重复发放）。
 //! 3. 业务码语义：`0` 成功；`40001` 今日已领（幂等中性）；`4006` 名额用完（中性）；
@@ -73,14 +78,105 @@ fn pool_entries(st: &AppState, user_ids: &[String]) -> Result<Vec<PoolEntry>, St
     Ok(out)
 }
 
-/// delivery 单项是否可自动领取：`claimable && extra.triggerMode=="MANUAL_CLAIM"`
+/// delivery 单项是否可自动领取（VENU-42 放宽）：`claimable==true` 且触发模式为
+/// MANUAL_CLAIM 或未声明（extra/triggerMode 缺失、空串——活动面结构漂移防御）。
+/// TRIGGER_EVENT 明确排除：事件类活动需真实触发，本端绝不伪造事件；
+/// 未声明 triggerMode 的可领项交服务器仲裁（服务端拒绝触发类直领，返回归 noop）。
 fn claimable_manual(item: &Value) -> bool {
-    item.get("claimable").and_then(Value::as_bool).unwrap_or(false)
-        && item
+    if !item.get("claimable").and_then(Value::as_bool).unwrap_or(false) {
+        return false;
+    }
+    match item.pointer("/extra/triggerMode").and_then(Value::as_str) {
+        None => true,
+        Some(m) => m.is_empty() || m.eq_ignore_ascii_case("MANUAL_CLAIM"),
+    }
+}
+
+/// delivery 中「事件触发类、本端不自动领取」的活动标题（claimable 且
+/// TRIGGER_EVENT）。VENU-42：如实上报标题，Skill 大赛/学生认证等渠道对用户可见。
+fn event_gated_titles(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| {
+            item.get("claimable").and_then(Value::as_bool).unwrap_or(false)
+                && item
+                    .pointer("/extra/triggerMode")
+                    .and_then(Value::as_str)
+                    .map(|m| m.eq_ignore_ascii_case("TRIGGER_EVENT"))
+                    .unwrap_or(false)
+        })
+        .map(|item| {
+            item.get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("活动")
+                .to_string()
+        })
+        .collect()
+}
+
+/// delivery 全量活动的如实枚举（VENU-42：每个渠道的领取结果对用户可见）。
+/// 只归类不可自动领取项（可自动领取项走 claim 路径，逐项如实落库）：
+/// `status==CONFIRMED/CLAIMED` → 已领取/已发放；`triggerMode==TRIGGER_EVENT` →
+/// 事件触发类（列标题，官方端完成）；其余 → 暂不可领（条件未满足，列标题——
+/// 2026-11-22 真机探针：学生认证 STUDENT_CERTIFIED 渠道 claimable=false 且无 status，
+/// 属此桶，标题必须可见）。
+fn delivery_enumeration(items: &[Value]) -> String {
+    let mut confirmed = 0usize;
+    let mut gated: Vec<String> = Vec::new();
+    let mut other: Vec<String> = Vec::new();
+    for item in items {
+        if claimable_manual(item) {
+            continue;
+        }
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("活动")
+            .to_string();
+        let confirmed_item = item
+            .get("status")
+            .and_then(Value::as_str)
+            .map(|s| s.eq_ignore_ascii_case("CONFIRMED") || s.eq_ignore_ascii_case("CLAIMED"))
+            .unwrap_or(false);
+        let gated_item = item
             .pointer("/extra/triggerMode")
             .and_then(Value::as_str)
-            .map(|m| m.eq_ignore_ascii_case("MANUAL_CLAIM"))
-            .unwrap_or(false)
+            .map(|m| m.eq_ignore_ascii_case("TRIGGER_EVENT"))
+            .unwrap_or(false);
+        if confirmed_item {
+            confirmed += 1;
+        } else if gated_item {
+            gated.push(title);
+        } else {
+            other.push(title);
+        }
+    }
+    let mut parts = vec![format!("delivery 共 {} 个活动", items.len())];
+    if confirmed > 0 {
+        parts.push(format!("已领取/已发放 {confirmed}"));
+    }
+    if !gated.is_empty() {
+        parts.push(format!(
+            "事件触发类 {} 个需在官方端完成（{}）",
+            gated.len(),
+            gated.join("、")
+        ));
+    }
+    if !other.is_empty() {
+        parts.push(format!(
+            "暂不可领（条件未满足）{}（{}）",
+            other.len(),
+            other.join("、")
+        ));
+    }
+    parts.join("；")
+}
+
+/// 「无可自动领取」的如实说明（VENU-42）：不再沿用旧文案的事件类误归因
+/// （stage-3 实测：filter 空转时 3 个活动实为客户端已领 CONFIRMED，非事件类），
+/// 改为基线短语 + delivery 全量枚举，被跳过的渠道标题可见。
+fn noop_delivery_message(items: &[Value]) -> String {
+    format!("无可自动领取的活动；{}", delivery_enumeration(items))
 }
 
 /// claim 业务码 → (归类, 展示) 归类：success / already / noop / fail / disabled
@@ -168,10 +264,12 @@ fn checkin_one(st: &AppState, account: &Value) -> (String, String, Option<f64>, 
     }
     let claimable_items: Vec<&Value> =
         items.iter().filter(|item| claimable_manual(item)).collect();
+    // 事件触发类标题先行提取（VENU-42：无论本轮是否领到，跳过的渠道如实可见）
+    let event_gated = event_gated_titles(&items);
     if claimable_items.is_empty() {
         return (
             "noop".into(),
-            "无可自动领取的活动（事件类活动需真实触发，已跳过）".into(),
+            noop_delivery_message(&items),
             None,
             None,
             None,
@@ -241,6 +339,13 @@ fn checkin_one(st: &AppState, account: &Value) -> (String, String, Option<f64>, 
             }
         }
     }
+    // VENU-42：事件触发类活动不自动领取（绝不伪造事件），但标题如实呈现
+    if !event_gated.is_empty() {
+        parts.push(format!(
+            "事件触发类活动需真实触发，已跳过（官方端完成）：{}",
+            event_gated.join("、")
+        ));
+    }
     // ③ 聚合（禁用熔断优先；部分成功按 success 记账 + 明细呈现）
     if let Some(reason) = disabled_reason {
         return ("fail".into(), reason, None, None, Some("needs_relogin".into()));
@@ -279,6 +384,75 @@ fn fmt_amount(amount: f64) -> String {
     } else {
         format!("{amount}")
     }
+}
+
+/// 只读 delivery 探针（VENU-42 步骤 1）：全量活动 dump（campaignId / title / type /
+/// claimable / status / benefitAmount / triggerMode / triggerEvent），
+/// **不 claim、不改池、不改签到状态**——凭证恢复后跑「活动清单对照报告」的入口
+/// （CLI `--task-run codearts-delivery-dump`；与旧版实领清单对照定稿过滤器语义）。
+/// 输出脱敏：仅活动字段，无凭证内容；凭证失败如实记 error 不熔断。
+pub fn dump_delivery(st: &AppState) -> Result<Value, String> {
+    let pool = crate::store::docs::codearts_pool_load_checked(&crate::store::db(&st.data_dir))?;
+    let empty = Vec::new();
+    let accounts = pool.get("accounts").and_then(Value::as_array).unwrap_or(&empty);
+    if accounts.is_empty() {
+        return Ok(json!({ "ok": true, "skipped": "CodeArts 账号池为空" }));
+    }
+    let mut rows = Vec::new();
+    for acc in accounts {
+        let user_id = acc.get("user_id").and_then(Value::as_str).unwrap_or("").to_string();
+        let name = acc.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+        let cred = match ensure_fresh_credential(st, acc) {
+            Ok(c) => c,
+            Err(e) => {
+                rows.push(json!({ "user_id": user_id, "name": name, "error": e }));
+                continue;
+            }
+        };
+        let (status, parsed, raw) =
+            snap_request("GET", "/v1/ops/delivery", &[("channel", "IDE")], None, &cred, true);
+        if status != 200 || classify_needs_relogin(status, &raw) {
+            rows.push(json!({
+                "user_id": user_id, "name": name, "http": status,
+                "error": excerpt(&raw),
+            }));
+            continue;
+        }
+        let Some(value) = parsed else {
+            rows.push(json!({
+                "user_id": user_id, "name": name, "http": status,
+                "error": format!("响应不是 JSON：{}", excerpt(&raw)),
+            }));
+            continue;
+        };
+        let code = value.get("code").and_then(Value::as_i64).unwrap_or(0);
+        let empty_arr = Vec::new();
+        let items = value
+            .pointer("/data/items")
+            .and_then(Value::as_array)
+            .unwrap_or(&empty_arr);
+        // 只保留活动字段（脱敏白名单：extra 仅取 triggerMode / triggerEvent）
+        let slim: Vec<Value> = items
+            .iter()
+            .map(|item| {
+                json!({
+                    "campaignId": item.get("campaignId"),
+                    "title": item.get("title"),
+                    "type": item.get("type"),
+                    "claimable": item.get("claimable"),
+                    "status": item.get("status"),
+                    "benefitAmount": item.get("benefitAmount"),
+                    "triggerMode": item.pointer("/extra/triggerMode"),
+                    "triggerEvent": item.pointer("/extra/triggerEvent"),
+                })
+            })
+            .collect();
+        rows.push(json!({
+            "user_id": user_id, "name": name, "http": status, "code": code,
+            "items": slim,
+        }));
+    }
+    Ok(json!({ "ok": true, "accounts": rows }))
 }
 
 /// 执行一轮签到（多账号间隔防频控；进度经 emit 回调推送 NDJSON 行；
@@ -438,7 +612,7 @@ mod tests {
             "extra": { "triggerMode": "MANUAL_CLAIM", "triggerEvent": "user.login" }
         });
         assert!(claimable_manual(&item));
-        // 事件类（非 MANUAL_CLAIM）不可自动领取
+        // 事件类（TRIGGER_EVENT）不可自动领取——绝不伪造触发事件（VENU-42 金测）
         let event_item = json!({
             "campaignId": 2, "claimable": true,
             "extra": { "triggerMode": "TRIGGER_EVENT" }
@@ -450,8 +624,78 @@ mod tests {
             "extra": { "triggerMode": "MANUAL_CLAIM" }
         });
         assert!(!claimable_manual(&not_claimable));
-        // 字段缺失不 panic
+        // 字段缺失不 panic（claimable 缺失 → 不可领）
         assert!(!claimable_manual(&json!({})));
+        // VENU-42 放宽：triggerMode 未声明（extra 整体缺失 / triggerMode 缺失 / 空串）
+        // 的可领项交服务器仲裁，不再因结构漂移被静默过滤
+        assert!(claimable_manual(&json!({ "claimable": true })));
+        assert!(claimable_manual(&json!({ "claimable": true, "extra": {} })));
+        assert!(claimable_manual(&json!({
+            "claimable": true, "extra": { "triggerMode": "" }
+        })));
+        // 小写形态同旧基线：大小写不敏感
+        assert!(claimable_manual(&json!({
+            "claimable": true, "extra": { "triggerMode": "manual_claim" }
+        })));
+    }
+
+    /// VENU-42 金测：事件触发类标题提取 + delivery 如实枚举 + noop 消息。
+    /// 场景取自 stage-3 真机探针观测（6 活动中 3 个 MANUAL_CLAIM 均已 CONFIRMED）
+    /// 与「Skill 大赛可能为 TRIGGER_EVENT」假设的合成 fixture。
+    #[test]
+    fn delivery_enumeration_reports_skipped_channels() {
+        let items = vec![
+            // 可自动领取（走 claim 路径，不在枚举内）
+            json!({
+                "campaignId": 1, "title": "Daily Check-in: Claim 100 Credits",
+                "claimable": true, "status": "ELIGIBLE", "benefitAmount": 100,
+                "extra": { "triggerMode": "MANUAL_CLAIM" }
+            }),
+            // 已领取（客户端/历史轮 CONFIRMED）
+            json!({
+                "campaignId": 2, "title": "Daily Check-in Reward for Skill Innovation Challenge",
+                "claimable": false, "status": "CONFIRMED", "benefitAmount": 1000,
+                "extra": { "triggerMode": "MANUAL_CLAIM" }
+            }),
+            // 事件触发类（本端不自动领取，标题如实上报）
+            json!({
+                "campaignId": 3, "title": "学生认证奖励",
+                "claimable": true, "status": "ELIGIBLE", "benefitAmount": 200,
+                "extra": { "triggerMode": "TRIGGER_EVENT" }
+            }),
+            // 事件触发类但不可领（未完成事件）
+            json!({
+                "campaignId": 4, "title": "Skill 大赛事件奖励",
+                "claimable": false, "status": "IN_PROGRESS",
+                "extra": { "triggerMode": "TRIGGER_EVENT" }
+            }),
+            // 其余未开放
+            json!({
+                "campaignId": 5, "title": "其他活动", "claimable": false, "status": "ELIGIBLE",
+            }),
+        ];
+        let gated = event_gated_titles(&items);
+        // 可领取的事件类才计入「领取路径跳过」清单（post-loop note 用）
+        assert_eq!(gated, vec!["学生认证奖励".to_string()]);
+        let enumeration = delivery_enumeration(&items);
+        // 枚举更宽：所有 TRIGGER_EVENT 渠道（含不可领）都列标题，渠道可见性优先
+        assert!(enumeration.contains("delivery 共 5 个活动"), "{enumeration}");
+        assert!(enumeration.contains("已领取/已发放 1"), "{enumeration}");
+        assert!(
+            enumeration.contains(
+                "事件触发类 2 个需在官方端完成（学生认证奖励、Skill 大赛事件奖励）"
+            ),
+            "{enumeration}"
+        );
+        assert!(
+            enumeration.contains("暂不可领（条件未满足）1（其他活动）"),
+            "{enumeration}"
+        );
+        let noop = noop_delivery_message(&items);
+        assert!(noop.starts_with("无可自动领取的活动；delivery 共 5 个活动"), "{noop}");
+        // 全部可领时枚举只剩总数
+        let all_claimable = vec![json!({ "campaignId": 9, "claimable": true })];
+        assert_eq!(delivery_enumeration(&all_claimable), "delivery 共 1 个活动");
     }
 
     #[test]
@@ -489,6 +733,41 @@ mod tests {
         let picked = pool_entries(&st, &["u2".to_string()]).unwrap();
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].name, "乙");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// VENU-42 金测：只读探针 dump_delivery 的离线路径——空池跳过；
+    /// 有账号无凭证时如实记 error（不发网络、不熔断、不改池）。
+    #[test]
+    fn dump_delivery_offline_paths() {
+        let dir = std::env::temp_dir().join(format!("aiwork_codearts_dump_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let st = AppState {
+            data_dir: dir.clone(),
+            jwt_refresh_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            qoder_pool_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            wb_pool_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            buddy_ai_pool_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            doubao_pool_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            group_defs_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+        };
+        // 空池 → skipped
+        let out = dump_delivery(&st).unwrap();
+        assert_eq!(
+            out.get("skipped").and_then(Value::as_str),
+            Some("CodeArts 账号池为空")
+        );
+        // 有账号无凭证 → 每账号如实 error，不 panic
+        let db = crate::store::db(&st.data_dir);
+        crate::store::docs::codearts_pool_save(
+            &db,
+            &json!({ "accounts": [{ "id": "ca-d1", "user_id": "u1", "name": "甲" }] }),
+        )
+        .unwrap();
+        let out = dump_delivery(&st).unwrap();
+        let rows = out.get("accounts").and_then(Value::as_array).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].get("error").and_then(Value::as_str).unwrap_or("").contains("无凭证"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

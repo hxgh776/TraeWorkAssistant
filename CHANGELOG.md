@@ -16,6 +16,14 @@
 - 能力不回退：MiniMax 双区与区域筛选签到、CodeArts noop「无可领取」语义与领取过滤器口径、OfficeAce / LobsterAI 本机登录态检测与手动签到、四应用自动签到开关与时刻全部保留；积分余额取不到时显「—」+ 错误横幅，不用 0 冒充。
 - 原「凭证与调度」「区分布与调度」「账号速览」等自研卡口径并入配置导航脚注，信息不丢。
 
+## [Unreleased] · CodeArts 领取渠道补全与如实枚举（VENU-42，复核修复版）
+
+### 变更
+
+- **签到过滤器**：只领 `claimable` 且 **type=USER_LOGIN** 且触发模式为 `MANUAL_CLAIM` 或**未声明**（extra/triggerMode 缺失/空串）的活动。旧 3.9.3 exe 串证据（解析面/单 MANUAL_CLAIM 字面量/channel=IDE）证明新旧过滤器语义一致、旧版日实领 Skill 大赛 1000 CREDIT——「重建后只领 100」主因是凭证失效（11-18 20:26 起 STS 过期，新版从未成功领取）；放宽未声明 `triggerMode` 是对活动面结构漂移的防御，交服务器仲裁。**非 USER_LOGIN 类型显式排除代领**（复核口径）：`STUDENT_CERTIFIED`（学生认证，一次性认证奖励，状态由官方端核验）与 `NEW_USER_REGISTER`（AUTO_GRANT 已发放）只展示不自动领取；`TRIGGER_EVENT` 事件类活动仍绝不自动领取（不伪造触发事件）。
+- **领取结果如实枚举**：签到消息不再把「无可自动领取」笼统归因事件类（stage-3 实测：3 个活动实为客户端已领 CONFIRMED），改为枚举 delivery 全量活动——已领取/已发放数、事件触发类**列标题**（官方端完成）、暂不可领（需官方端完成对应条件，如学生认证）**列标题**；领取轮尾部同样追加事件类跳过清单。
+- **只读探针**：新增 CLI `--task-run codearts-delivery-dump`（全量活动 dump：campaignId/title/type/claimable/triggerMode/status/金额，不 claim、不改池、输出脱敏），与旧版实领清单（日 1100：Daily 100 + Skill 大赛 1000）对照定稿过滤器语义；`codearts_live_probe`（`#[ignore]` 测试）输出补 title 字段。
+
 ---
 
 ## [3.9.7] · 2026-11-22 · 应用 Tab 栏排版修复：一行 3 个列列对齐（用户验收反馈）

@@ -330,6 +330,10 @@ pub fn run_cli_task(name: &str, state: &AppState) -> i32 {
         // CodeArts 积分数据同步（多账号，调度器/CLI 共用；空池空转；
         // 全部失败返 Err 交调度器冷却重试；任务名对齐旧 3.9.3 `codearts-credits-sync`）
         "codearts-credits-sync" => codearts_credits::run_sync_task(state),
+        // CodeArts delivery 只读探针（VENU-42）：全量活动 dump（campaignId/title/
+        // claimable/triggerMode/status/金额），不 claim、不改池、不熔断——凭证恢复后
+        // 跑「活动清单对照报告」的 CLI 入口（诊断任务，不注册调度器/schtasks）
+        "codearts-delivery-dump" => codearts_checkin::dump_delivery(state),
         // Buddy 国际版积分数据同步 / 凭证兜底续期 / 模型目录同步（调度器/CLI 共用；
         // runtime=None：CLI 独立进程无网关运行态，仅落库不做运行池拨新）
         "buddy-ai-credits-sync" => crate::commands::workbuddy::buddy_ai_credits_sync_impl(state, None)

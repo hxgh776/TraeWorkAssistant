@@ -1145,12 +1145,14 @@ mod tests {
                 v.get("code").and_then(Value::as_i64),
                 v.pointer("/data/items").and_then(Value::as_array).map(|a| a.len())
             );
-            // 活动明细（只打活动字段，不打凭证）：可领状态 / 触发模式 / 状态机
+            // 活动明细（只打活动字段，不打凭证）：标题 / 可领状态 / 触发模式 / 状态机
+            // （VENU-42：探针报告需 title 与金额对照旧版实领清单）
             if let Some(items) = v.pointer("/data/items").and_then(Value::as_array) {
                 for item in items {
                     println!(
-                        "[probe] item id={} type={} claimable={} status={} triggerMode={} amount={:?}",
+                        "[probe] item id={} title={:?} type={} claimable={} status={} triggerMode={} amount={:?}",
                         item.get("campaignId").and_then(Value::as_i64).unwrap_or(0),
+                        item.get("title").and_then(Value::as_str).unwrap_or("?"),
                         item.get("type").and_then(Value::as_str).unwrap_or("?"),
                         item.get("claimable").and_then(Value::as_bool).unwrap_or(false),
                         item.get("status").and_then(Value::as_str).unwrap_or("?"),

@@ -18,8 +18,10 @@ import type {
  * codearts-checkin 每日签到（VENU-41 风格对齐，对照 BuddyCheckin/QoderCheckin 同构）：
  * 领取语义说明卡 + 一键签到卡（账号池表格）+ 实时进度（NDJSON 逐行）
  * + 活动档期日历（checkinCalendarModel 聚合，含单测口径）+ 签到记录表 + 自动签到开关。
- * 能力不回退：多账号签到、领取语义（只领 claimable && MANUAL_CLAIM 活动，绝不伪造触发事件；
- * 40001/4006 幂等中性「已领取」；4004/无活动转 noop 不报错刷屏）、失败原因如实落库、
+ * 能力不回退：多账号签到、领取语义（只领 claimable 且 USER_LOGIN 类型 + MANUAL_CLAIM/
+ * 未声明 triggerMode 活动，绝不伪造触发事件；TRIGGER_EVENT 事件类与学生认证等非
+ * USER_LOGIN 类型不自动领取但标题如实呈现——VENU-42；40001/4006 幂等中性「已领取」；
+ * 4004/无活动转 noop 并如实枚举全量活动）、失败原因如实落库、
  * 自动签到开关与时刻全部保留（事件：codearts-checkin-progress NDJSON 行
  * type=start/account/done/exit，进度行为追加语义，exit 行收尾并刷新）。
  */
